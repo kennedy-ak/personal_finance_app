@@ -9,6 +9,9 @@ import '../../../core/theme.dart';
 import '../../../shared/widgets/section_header.dart';
 import '../../accounts/data/account_repository.dart';
 import '../../accounts/domain/account.dart';
+import '../../categories/data/category_repository.dart';
+import '../../categories/domain/category.dart';
+import '../../categories/presentation/category_editor_sheet.dart';
 import '../data/transaction_repository.dart';
 import '../domain/transaction.dart';
 
@@ -39,8 +42,19 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
     super.dispose();
   }
 
-  List<String> get _categories =>
-      _type == TxnType.expense ? kExpenseCategories : kIncomeCategories;
+  List<String> get _categories => _type == TxnType.expense
+      ? ref.watch(expenseCategoryNamesProvider)
+      : ref.watch(incomeCategoryNamesProvider);
+
+  /// Opens the category editor straight from the picker, so a missing category
+  /// is one tap to fix instead of a trip through Settings and back.
+  Future<void> _createCategory() async {
+    final made = await CategoryEditorSheet.show(
+      context,
+      kind: CategoryKind.forTxn(_type),
+    );
+    if (made != null && mounted) setState(() => _category = made);
+  }
 
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
@@ -83,10 +97,8 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
             description: _descCtrl.text.isEmpty ? null : _descCtrl.text,
             date: _date,
           );
-      final delta = _type == TxnType.income ? amount : -amount;
-      await ref
-          .read(accountRepositoryProvider)
-          .updateBalance(_account!.id, _account!.balance + delta);
+      // The account balance is derived from transactions in the database, so
+      // inserting the row is all it takes.
       bumpTransactions(ref);
       bumpAccounts(ref);
       if (!mounted) return;
@@ -134,26 +146,15 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
         return;
       }
       final note = _descCtrl.text.isEmpty ? null : _descCtrl.text;
-      final repo = ref.read(transactionRepositoryProvider);
-      await repo.create(
-        accountId: _account!.id,
-        type: TxnType.expense,
-        amount: amount,
-        category: kTransferCategory,
-        description: 'Transfer to ${_toAccount!.name}${note == null ? '' : ' — $note'}',
-        date: _date,
-      );
-      await repo.create(
-        accountId: _toAccount!.id,
-        type: TxnType.income,
-        amount: amount,
-        category: kTransferCategory,
-        description: 'Transfer from ${_account!.name}${note == null ? '' : ' — $note'}',
-        date: _date,
-      );
-      final accRepo = ref.read(accountRepositoryProvider);
-      await accRepo.updateBalance(_account!.id, _account!.balance - amount);
-      await accRepo.updateBalance(_toAccount!.id, _toAccount!.balance + amount);
+      // One row, not an Expense plus an Income. Moving your own money is not
+      // spending, and it should never show up as either.
+      await ref.read(transactionRepositoryProvider).createTransfer(
+            fromAccountId: _account!.id,
+            toAccountId: _toAccount!.id,
+            amount: amount,
+            description: note,
+            date: _date,
+          );
       bumpTransactions(ref);
       bumpAccounts(ref);
       if (!mounted) return;
@@ -305,13 +306,22 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                 ),
                 const SizedBox(height: 8),
                 if (!_isTransfer && _type == TxnType.expense) ...[
+                  TextButton.icon(
+                    onPressed: () => context.push('/pay'),
+                    icon: const Icon(Icons.alt_route, size: 18),
+                    label: const Text('Not sure which account? Let the app pick'),
+                  ),
+                  const SizedBox(height: 4),
                   const SectionHeader(title: 'Quick add'),
                   SizedBox(
                     height: 38,
                     child: ListView(
                       scrollDirection: Axis.horizontal,
                       children: [
-                        for (final q in kQuickAdds) ...[
+                        // A shortcut to a category the user has hidden is a
+                        // button that quietly does nothing.
+                        for (final q in kQuickAdds
+                            .where((q) => _categories.contains(q.category))) ...[
                           ActionChip(
                             avatar: Icon(iconForCategory(q.category), size: 16),
                             label: Text('${q.label} • ${formatMoney(q.amount)}'),
@@ -325,7 +335,7 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                   const SizedBox(height: 16),
                 ],
                 DropdownButtonFormField<Account>(
-                  value: _account,
+                  initialValue: _account,
                   decoration: InputDecoration(
                     labelText: _isTransfer ? 'From account' : 'Account',
                     prefixIcon: const Icon(Icons.account_balance_wallet),
@@ -341,7 +351,7 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                 const SizedBox(height: 12),
                 if (_isTransfer)
                   DropdownButtonFormField<Account>(
-                    value: _toAccount,
+                    initialValue: _toAccount,
                     decoration: const InputDecoration(
                       labelText: 'To account',
                       prefixIcon: Icon(Icons.swap_horiz),
@@ -353,28 +363,53 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                     onChanged: (v) => setState(() => _toAccount = v),
                     validator: (v) => v == null ? 'Required' : null,
                   )
-                else
-                  DropdownButtonFormField<String>(
-                    value: _category,
-                    decoration: const InputDecoration(
-                      labelText: 'Category',
-                      prefixIcon: Icon(Icons.category_outlined),
+                else ...[
+                  Builder(builder: (_) {
+                    final categories = _categories;
+                    // A category hidden or deleted while it sat selected would
+                    // otherwise assert its way out of the dropdown.
+                    final selected =
+                        categories.contains(_category) ? _category : null;
+                    return DropdownButtonFormField<String>(
+                      initialValue: selected,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Category',
+                        prefixIcon: Icon(Icons.category_outlined),
+                      ),
+                      items: [
+                        for (final c in categories)
+                          DropdownMenuItem(
+                            value: c,
+                            child: Row(
+                              children: [
+                                Icon(iconForCategory(c), size: 18),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child:
+                                      Text(c, overflow: TextOverflow.ellipsis),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                      onChanged: (v) => setState(() => _category = v),
+                      validator: (v) => v == null ? 'Required' : null,
+                    );
+                  }),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _createCategory,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('New category'),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 34),
+                      ),
                     ),
-                    items: _categories
-                        .map((c) => DropdownMenuItem(
-                              value: c,
-                              child: Row(
-                                children: [
-                                  Icon(iconForCategory(c), size: 18),
-                                  const SizedBox(width: 10),
-                                  Text(c),
-                                ],
-                              ),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _category = v),
-                    validator: (v) => v == null ? 'Required' : null,
                   ),
+                ],
                 const SizedBox(height: 12),
                 InkWell(
                   onTap: _pickDate,

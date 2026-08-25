@@ -81,9 +81,13 @@ _WeekStats _statsFor(List<Txn> txns, DateTime weekStart) {
   double inc = 0, exp = 0;
   int n = 0;
   for (final t in txns) {
+    if (!t.isRealMoneyMovement) continue;
     if (!t.date.isBefore(weekStart) && t.date.isBefore(end)) {
-      if (t.type == TxnType.income) inc += t.amount;
-      else exp += t.amount;
+      if (t.isIncome) {
+        inc += t.amount;
+      } else {
+        exp += t.amount;
+      }
       n++;
     }
   }
@@ -99,7 +103,8 @@ class _CurrentWeekTab extends StatelessWidget {
     final start = _ReportsScreenState._weekStart(DateTime.now());
     final stats = _statsFor(transactions, start);
     return ListView(
-      padding: const EdgeInsets.all(16),
+      // Clears the docked add button at the bottom of the screen.
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         Card(
           child: Padding(
@@ -175,11 +180,15 @@ class _DailyBars extends StatelessWidget {
     final inc = List.filled(7, 0.0);
     final exp = List.filled(7, 0.0);
     for (final t in transactions) {
+      if (!t.isRealMoneyMovement) continue;
       for (var i = 0; i < 7; i++) {
         final d = days[i];
         if (t.date.year == d.year && t.date.month == d.month && t.date.day == d.day) {
-          if (t.type == TxnType.income) inc[i] += t.amount;
-          else exp[i] += t.amount;
+          if (t.isIncome) {
+            inc[i] += t.amount;
+          } else {
+            exp[i] += t.amount;
+          }
         }
       }
     }
@@ -232,7 +241,8 @@ class _TrendsTab extends StatelessWidget {
         0, (m, s) => [s.income, s.expense, m].reduce((a, b) => a > b ? a : b));
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      // Clears the docked add button at the bottom of the screen.
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         const SectionHeader(title: '12-week trend'),
         Card(
@@ -356,7 +366,7 @@ class _DetailedTab extends ConsumerWidget {
         .where((t) => !t.date.isBefore(week) && t.date.isBefore(week.add(const Duration(days: 7))));
 
     final byCat = <String, double>{};
-    for (final t in inWeek.where((t) => t.type == TxnType.expense)) {
+    for (final t in inWeek.where((t) => t.isSpending)) {
       byCat[t.category] = (byCat[t.category] ?? 0) + t.amount;
     }
     final catEntries = byCat.entries.toList()..sort((a, b) => b.value.compareTo(a.value));

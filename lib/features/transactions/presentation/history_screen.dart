@@ -13,6 +13,7 @@ import '../../../shared/widgets/section_header.dart';
 import '../../accounts/data/account_repository.dart';
 import '../data/transaction_repository.dart';
 import '../domain/transaction.dart';
+import 'txn_style.dart';
 
 class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
@@ -88,8 +89,8 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
           data: (accs) {
             final names = {for (final a in accs) a.id: a.name};
             final filtered = _filter(list, names);
-            final inc = filtered.where((t) => t.type == TxnType.income).fold<double>(0, (s, t) => s + t.amount);
-            final exp = filtered.where((t) => t.type == TxnType.expense).fold<double>(0, (s, t) => s + t.amount);
+            final inc = filtered.where((t) => t.isIncome).fold<double>(0, (s, t) => s + t.amount);
+            final exp = filtered.where((t) => t.isSpending).fold<double>(0, (s, t) => s + t.amount);
             return Column(
               children: [
                 Padding(
@@ -163,8 +164,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                             itemCount: filtered.length,
                             itemBuilder: (_, i) {
                               final t = filtered[i];
-                              final isIncome = t.type == TxnType.income;
-                              final color = isIncome ? AppColors.income : AppColors.expense;
+                              final color = colorForTxn(t.type);
                               return Dismissible(
                                 key: ValueKey(t.id),
                                 background: Container(
@@ -210,10 +210,13 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                                           color: color.withValues(alpha: 0.12),
                                           borderRadius: BorderRadius.circular(12),
                                         ),
-                                        child: Icon(iconForCategory(t.category),
+                                        child: Icon(iconForTxn(t),
                                             color: color, size: 22),
                                       ),
-                                      title: Text(t.category,
+                                      title: Text(
+                                          titleForTxn(t,
+                                              fromName: names[t.accountId],
+                                              toName: names[t.toAccountId]),
                                           style: const TextStyle(fontWeight: FontWeight.w600)),
                                       subtitle: Text(
                                         '${dateLongFmt.format(t.date)} • ${names[t.accountId] ?? ''}'
@@ -223,7 +226,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                                         style: const TextStyle(fontSize: 12),
                                       ),
                                       trailing: Text(
-                                        '${isIncome ? '+' : '-'}${formatMoney(t.amount)}',
+                                        '${signForTxn(t.type)}${formatMoney(t.amount)}',
                                         style: TextStyle(
                                           color: color,
                                           fontWeight: FontWeight.w700,
@@ -296,25 +299,19 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   }
 
   Future<void> _deleteTxn(Txn t) async {
-    final accs = ref.read(accountsProvider).value ?? [];
-    final acc = accs.where((a) => a.id == t.accountId).firstOrNull;
+    // Balances are derived in the database — deleting the row is enough, and
+    // both sides of a transfer settle themselves.
     await ref.read(transactionRepositoryProvider).delete(t.id);
-    if (acc != null) {
-      final delta = t.type == TxnType.income ? -t.amount : t.amount;
-      await ref
-          .read(accountRepositoryProvider)
-          .updateBalance(acc.id, acc.balance + delta);
-    }
     bumpTransactions(ref);
     bumpAccounts(ref);
   }
 
   Future<void> _showDetails(Txn t, String? accountName) async {
-    final isIncome = t.type == TxnType.income;
-    final color = isIncome ? AppColors.income : AppColors.expense;
+    final color = colorForTxn(t.type);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      useRootNavigator: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -361,7 +358,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                             style: const TextStyle(
                                 fontSize: 18, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 2),
-                        Text(isIncome ? 'Income' : 'Expense',
+                        Text(t.type.label,
                             style: TextStyle(
                                 fontSize: 12,
                                 color: color,
@@ -370,7 +367,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                     ),
                   ),
                   Text(
-                    '${isIncome ? '+' : '-'}${formatMoney(t.amount)}',
+                    '${signForTxn(t.type)}${formatMoney(t.amount)}',
                     style: TextStyle(
                         color: color,
                         fontSize: 20,
@@ -441,6 +438,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useRootNavigator: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -474,7 +472,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                 Text('Filters', style: Theme.of(ctx).textTheme.titleLarge),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<TxnType?>(
-                  value: _typeFilter,
+                  initialValue: _typeFilter,
                   decoration: const InputDecoration(labelText: 'Type'),
                   items: const [
                     DropdownMenuItem(value: null, child: Text('All')),
@@ -485,7 +483,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String?>(
-                  value: _accountFilter,
+                  initialValue: _accountFilter,
                   decoration: const InputDecoration(labelText: 'Account'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('All')),
@@ -495,7 +493,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String?>(
-                  value: _categoryFilter,
+                  initialValue: _categoryFilter,
                   decoration: const InputDecoration(labelText: 'Category'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('All')),

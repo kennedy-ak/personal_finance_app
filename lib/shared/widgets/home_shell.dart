@@ -16,6 +16,9 @@ class HomeShell extends StatelessWidget {
     final idx = shell.currentIndex;
     final showFab = idx != 3; // hide on Insights (Ask AI has its own input)
     return Scaffold(
+      // Wrapped here rather than at the app root so the sweep only runs behind
+      // the signed-in shell — the splash and auth screens have no user to write
+      // rows for.
       body: shell,
       floatingActionButton: showFab
           ? FloatingActionButton(

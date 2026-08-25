@@ -1,119 +1,43 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
 import '../../../shared/widgets/section_header.dart';
 import '../data/account_repository.dart';
 import '../domain/account.dart';
+import 'account_editor_sheet.dart';
 
 class AccountsScreen extends ConsumerWidget {
   const AccountsScreen({super.key});
 
-  Future<void> _showCreate(BuildContext context, WidgetRef ref) async {
-    final nameCtrl = TextEditingController();
-    final balCtrl = TextEditingController(text: '0');
-    final ok = await showDialog<bool>(
+  Future<void> _showCreate(BuildContext context, WidgetRef ref) =>
+      AccountEditorSheet.show(context);
+
+  Future<void> _showEdit(BuildContext context, WidgetRef ref, Account a) =>
+      AccountEditorSheet.show(context, account: a);
+
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref, Account a) async {
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('New account'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                    labelText: 'Name', prefixIcon: Icon(Icons.label_outline))),
-            const SizedBox(height: 12),
-            TextField(
-              controller: balCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                  labelText: 'Starting balance', prefixText: 'GHS '),
-            ),
-          ],
-        ),
+        title: Text('Delete "${a.name}"?'),
+        content: const Text('All transactions on this account will also be deleted.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.expense),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete')),
         ],
       ),
     );
-    if (ok == true && nameCtrl.text.trim().isNotEmpty) {
-      try {
-        await ref.read(accountRepositoryProvider).create(
-              nameCtrl.text.trim(),
-              double.tryParse(balCtrl.text) ?? 0,
-            );
-        bumpAccounts(ref);
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-        }
-      }
-    }
-  }
-
-  Future<void> _showEdit(BuildContext context, WidgetRef ref, Account a) async {
-    final nameCtrl = TextEditingController(text: a.name);
-    final balCtrl = TextEditingController(text: a.balance.toStringAsFixed(2));
-    final action = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit account'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name')),
-            const SizedBox(height: 12),
-            TextField(
-              controller: balCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Balance', prefixText: 'GHS '),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, 'delete'),
-              child: const Text('Delete', style: TextStyle(color: Colors.red))),
-          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
-        ],
-      ),
-    );
-
-    final repo = ref.read(accountRepositoryProvider);
+    if (confirm != true) return;
     try {
-      if (action == 'save') {
-        if (nameCtrl.text.trim() != a.name) {
-          await repo.rename(a.id, nameCtrl.text.trim());
-        }
-        final newBal = double.tryParse(balCtrl.text) ?? a.balance;
-        if (newBal != a.balance) await repo.updateBalance(a.id, newBal);
-        bumpAccounts(ref);
-      } else if (action == 'delete') {
-        if (!context.mounted) return;
-        final confirm = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: Text('Delete "${a.name}"?'),
-            content: const Text('All transactions on this account will also be deleted.'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-              FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: AppColors.expense),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Delete')),
-            ],
-          ),
-        );
-        if (confirm == true) {
-          await repo.delete(a.id);
-          bumpAccounts(ref);
-        }
-      }
+      await ref.read(accountRepositoryProvider).delete(a.id);
+      bumpAccounts(ref);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -181,6 +105,22 @@ class AccountsScreen extends ConsumerWidget {
                             letterSpacing: -1,
                           )),
                     ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    onTap: () => context.push('/plan'),
+                    leading: const Icon(Icons.event_repeat_outlined,
+                        color: AppColors.seed),
+                    title: const Text('Commitments & goals',
+                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14.5)),
+                    subtitle: const Text(
+                      'Bills, expected income and money you will not touch',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
                   ),
                 ),
                 if (list.length > 1) ...[
@@ -277,8 +217,7 @@ class AccountsScreen extends ConsumerWidget {
                                   color: AppColors.seed.withValues(alpha: 0.12),
                                   borderRadius: BorderRadius.circular(14),
                                 ),
-                                child: const Icon(Icons.account_balance_wallet,
-                                    color: AppColors.seed),
+                                child: Icon(_iconFor(a.kind), color: AppColors.seed),
                               ),
                               const SizedBox(width: 14),
                               Expanded(
@@ -288,26 +227,43 @@ class AccountsScreen extends ConsumerWidget {
                                     Text(a.name,
                                         style: const TextStyle(
                                             fontWeight: FontWeight.w600, fontSize: 15)),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      a.balance < 100
-                                          ? 'Low balance'
-                                          : 'Active',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: a.balance < 100
-                                            ? AppColors.warning
-                                            : Theme.of(context).colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
+                                    const SizedBox(height: 3),
+                                    _AccountStatusLine(account: a),
                                   ],
                                 ),
                               ),
-                              Text(formatMoney(a.balance),
-                                  style: const TextStyle(
-                                      fontSize: 16, fontWeight: FontWeight.w700)),
-                              const SizedBox(width: 4),
-                              const Icon(Icons.chevron_right),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(formatMoney(a.balance),
+                                      style: const TextStyle(
+                                          fontSize: 16, fontWeight: FontWeight.w700)),
+                                  if (a.minBalance > 0)
+                                    Text(
+                                      '${formatMoney(a.available)} free',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert),
+                                onSelected: (v) {
+                                  if (v == 'edit') _showEdit(context, ref, a);
+                                  if (v == 'delete') _confirmDelete(context, ref, a);
+                                },
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                  PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text('Delete',
+                                          style: TextStyle(color: AppColors.expense))),
+                                ],
+                              ),
                             ],
                           ),
                         ),
@@ -319,6 +275,53 @@ class AccountsScreen extends ConsumerWidget {
           );
         },
       ),
+    );
+  }
+}
+
+IconData _iconFor(AccountKind kind) => switch (kind) {
+      AccountKind.bank => Icons.account_balance,
+      AccountKind.momo => Icons.phone_android,
+      AccountKind.cash => Icons.payments_outlined,
+      AccountKind.savings => Icons.savings_outlined,
+      AccountKind.investment => Icons.trending_up,
+      AccountKind.credit => Icons.credit_card,
+    };
+
+/// The one-line answer to "what is this money doing?".
+class _AccountStatusLine extends StatelessWidget {
+  final Account account;
+  const _AccountStatusLine({required this.account});
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+
+    final (String text, Color color) = switch (account) {
+      final a when a.isBelowFloor => (
+          'Below your ${formatMoney(a.minBalance)} floor',
+          AppColors.expense,
+        ),
+      final a when a.liquidity == Liquidity.locked => (
+          '${a.kind.label} • Locked',
+          muted,
+        ),
+      final a when a.liquidity == Liquidity.reserved => (
+          '${a.kind.label} • Reserved',
+          AppColors.warning,
+        ),
+      final a when a.purpose != null && a.purpose!.isNotEmpty => (
+          a.purpose!,
+          muted,
+        ),
+      final a => ('${a.kind.label} • Spendable', muted),
+    };
+
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(fontSize: 11.5, color: color),
     );
   }
 }

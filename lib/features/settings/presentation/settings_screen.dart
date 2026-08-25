@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/notifications.dart';
 import '../../../core/theme.dart';
@@ -38,6 +39,27 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
           const SizedBox(height: 18),
+          const SectionHeader(title: 'Your money'),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.event_repeat_outlined),
+              title: const Text('Commitments & goals'),
+              subtitle: const Text('Bills, expected income, money to protect'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/plan'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.category_outlined),
+              title: const Text('Categories'),
+              subtitle: const Text('Add your own, hide the ones you never use'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/categories'),
+            ),
+          ),
+          const SizedBox(height: 18),
           const SectionHeader(title: 'Daily reminder'),
           reminderAsync.when(
             loading: () => const Card(child: Padding(padding: EdgeInsets.all(16), child: LinearProgressIndicator())),
@@ -54,19 +76,33 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: 18),
           const SectionHeader(title: 'AI coach'),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.key),
-              title: const Text('OpenAI API key'),
-              subtitle: Text(
-                keyAsync.value?.isNotEmpty == true ? 'Configured' : 'Not set',
-                style: TextStyle(
-                  color: keyAsync.value?.isNotEmpty == true
-                      ? AppColors.income
-                      : Theme.of(context).colorScheme.onSurfaceVariant,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.key),
+                  title: const Text('Fallback API key'),
+                  subtitle: Text(
+                    keyAsync.value?.isNotEmpty == true
+                        ? 'Set — used only if the server coach is unavailable'
+                        : 'Not set — the coach runs on the server',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _showApiKeyDialog(context, ref),
                 ),
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _showApiKeyDialog(context, ref),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('Older conversations'),
+                  subtitle: const Text(
+                      'Q&A saved before the coach could remember',
+                      style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => context.push('/ai-history'),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 18),
