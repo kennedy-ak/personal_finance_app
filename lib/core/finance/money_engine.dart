@@ -105,6 +105,15 @@ class MoneySnapshot {
   final double spend30d;
   final double income30d;
 
+  /// Real spending over the 30 days before those, so the dashboard can say
+  /// whether this month is news rather than just how big it is.
+  final double prevSpend30d;
+
+  /// Change in spending against the previous 30 days, as a fraction. Null
+  /// when there is nothing to compare against.
+  double? get spendChangeRatio =>
+      prevSpend30d <= 0 ? null : (spend30d - prevSpend30d) / prevSpend30d;
+
   const MoneySnapshot({
     required this.asOf,
     required this.horizon,
@@ -124,6 +133,7 @@ class MoneySnapshot {
     required this.categories,
     required this.spend30d,
     required this.income30d,
+    required this.prevSpend30d,
   });
 
   /// Liquid money that is genuinely the user's to allocate — after floors and
@@ -282,7 +292,7 @@ MoneySnapshot buildSnapshot({
   final cut30 = asOf.subtract(const Duration(days: 30));
   final cut60 = asOf.subtract(const Duration(days: 60));
 
-  double spend30d = 0, income30d = 0;
+  double spend30d = 0, income30d = 0, prevSpend30d = 0;
   final current = <String, double>{};
   final previous = <String, double>{};
 
@@ -296,6 +306,7 @@ MoneySnapshot buildSnapshot({
       spend30d += t.amount;
       current[t.category] = (current[t.category] ?? 0) + t.amount;
     } else if (inPrevious) {
+      prevSpend30d += t.amount;
       previous[t.category] = (previous[t.category] ?? 0) + t.amount;
     }
   }
@@ -328,6 +339,7 @@ MoneySnapshot buildSnapshot({
     categories: categories,
     spend30d: spend30d,
     income30d: income30d,
+    prevSpend30d: prevSpend30d,
   );
 }
 

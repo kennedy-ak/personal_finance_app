@@ -9,8 +9,8 @@ class AccountRepository {
     final rows = await supabase
         .from('accounts')
         .select()
-        .order('sort_order')
-        .order('name');
+        .order('sort_order', ascending: true)
+        .order('name', ascending: true);
     return (rows as List).map((r) => Account.fromJson(r as Map<String, dynamic>)).toList();
   }
 

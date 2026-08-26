@@ -11,8 +11,8 @@ class CategoryRepository {
     final rows = await supabase
         .from('categories')
         .select()
-        .order('sort_order')
-        .order('name');
+        .order('sort_order', ascending: true)
+        .order('name', ascending: true);
     return (rows as List)
         .map((r) => Category.fromJson(r as Map<String, dynamic>))
         .toList();

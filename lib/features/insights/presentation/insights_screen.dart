@@ -2,21 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/design/components.dart';
 import '../../../core/finance/alerts.dart';
 import '../../../core/finance/money_engine.dart';
 import '../../../core/finance/snapshot_provider.dart';
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
-import '../../../shared/widgets/section_header.dart';
 import '../../accounts/data/account_repository.dart';
 import '../../accounts/domain/account.dart';
+import '../../dashboard/presentation/widgets/alert_list.dart';
 import '../../planning/data/goal_repository.dart';
 import '../../planning/data/obligation_repository.dart';
 import '../../planning/domain/goal.dart';
 import '../../planning/domain/obligation.dart';
 import '../../transactions/data/transaction_repository.dart';
 import '../../transactions/domain/transaction.dart';
-import '../../dashboard/presentation/widgets/alert_list.dart';
 import 'ask_ai_tab.dart';
 import 'daily_tip_card.dart';
 
@@ -27,38 +27,56 @@ class InsightsScreen extends ConsumerStatefulWidget {
   ConsumerState<InsightsScreen> createState() => _InsightsScreenState();
 }
 
-class _InsightsScreenState extends ConsumerState<InsightsScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tab = TabController(length: 2, vsync: this);
-
-  @override
-  void dispose() {
-    _tab.dispose();
-    super.dispose();
-  }
+class _InsightsScreenState extends ConsumerState<InsightsScreen> {
+  int _tab = 0;
 
   @override
   Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
     final accounts = ref.watch(accountsProvider).value ?? const <Account>[];
     final txns = ref.watch(transactionsProvider).value ?? const <Txn>[];
 
+    // Ask AI runs edge to edge — its composer is pinned to the bottom and it
+    // owns its own header, so the shared chrome would only get in the way.
+    if (_tab == 1) {
+      return Scaffold(
+        backgroundColor: t.canvas,
+        body: SafeArea(
+          bottom: false,
+          child: AskAiTab(
+            accounts: accounts,
+            txns: txns,
+            onBackToOverview: () => setState(() => _tab = 0),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Insights'),
-        bottom: TabBar(
-          controller: _tab,
-          tabs: const [
-            Tab(icon: Icon(Icons.insights), text: 'Overview'),
-            Tab(icon: Icon(Icons.auto_awesome), text: 'Ask AI'),
+      backgroundColor: t.canvas,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Insights', style: AppType.title.copyWith(color: t.ink)),
+                  const SizedBox(height: 18),
+                  SegmentedTabs(
+                    labels: const ['Overview', 'Ask AI'],
+                    index: _tab,
+                    onChanged: (i) => setState(() => _tab = i),
+                  ),
+                ],
+              ),
+            ),
+            const Expanded(child: _Overview()),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tab,
-        children: [
-          const _Overview(),
-          AskAiTab(accounts: accounts, txns: txns),
-        ],
       ),
     );
   }
@@ -75,6 +93,7 @@ class _Overview extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = CediTokens.of(context);
     final snapshotAsync = ref.watch(moneySnapshotProvider);
     final alerts = ref.watch(moneyAlertsProvider).value ?? const <MoneyAlert>[];
     final obligations =
@@ -83,8 +102,15 @@ class _Overview extends ConsumerWidget {
     final accounts = ref.watch(accountsProvider).value ?? const <Account>[];
 
     return snapshotAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
+      loading: () => Center(child: CircularProgressIndicator(color: t.brandInk)),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: ErrorCard(
+          title: 'Could not work out your position',
+          message: 'Check your connection and try again.',
+          onRetry: () => bumpAccounts(ref),
+        ),
+      ),
       data: (s) {
         final gaps = _gaps(
           snapshot: s,
@@ -92,8 +118,11 @@ class _Overview extends ConsumerWidget {
           obligations: obligations,
           hasSpending: s.spend30d > 0,
         );
+        final activeGoals = goals.where((g) => g.isActive).toList();
 
         return RefreshIndicator(
+          color: t.brandInk,
+          backgroundColor: t.card,
           onRefresh: () async {
             bumpAccounts(ref);
             bumpTransactions(ref);
@@ -102,43 +131,56 @@ class _Overview extends ConsumerWidget {
             await ref.read(moneySnapshotProvider.future);
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 96),
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 112),
             children: [
+              const DailyTipCard(),
+
               if (alerts.isNotEmpty) ...[
-                const SectionHeader(title: 'Needs your attention'),
-                AlertList(alerts: alerts, collapsedCount: 3),
                 const SizedBox(height: 18),
+                AlertList(
+                  alerts: alerts,
+                  collapsedCount: 3,
+                  heading: 'Needs your attention',
+                ),
               ],
 
               if (gaps.isNotEmpty) ...[
-                const SectionHeader(title: 'Make this sharper'),
-                for (final gap in gaps)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _GapCard(gap: gap),
-                  ),
                 const SizedBox(height: 18),
+                const SectionRow(title: 'Make this sharper'),
+                const SizedBox(height: 10),
+                RowGroup(
+                  children: [for (final gap in gaps) _GapRow(gap: gap)],
+                ),
               ],
 
               // Figures only exist once there is history to compute them from.
               if (s.spend30d > 0 || s.income30d > 0) ...[
-                const SectionHeader(title: 'Your numbers'),
+                const SizedBox(height: 18),
+                const SectionRow(title: 'Your numbers'),
+                const SizedBox(height: 10),
                 _NumbersGrid(snapshot: s),
-                const SizedBox(height: 18),
               ],
 
-              if (goals.any((g) => g.isActive)) ...[
-                const SectionHeader(title: 'Goals'),
-                for (final g in goals.where((g) => g.isActive))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _GoalProgress(goal: g),
+              if (activeGoals.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                SectionRow(
+                  title: 'Goals',
+                  action: 'Edit',
+                  onAction: () => context.push('/plan'),
+                ),
+                const SizedBox(height: 10),
+                CediCard(
+                  onTap: () => context.push('/plan'),
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < activeGoals.length; i++) ...[
+                        if (i > 0) const SizedBox(height: 14),
+                        _GoalMeter(goal: activeGoals[i], index: i),
+                      ],
+                    ],
                   ),
-                const SizedBox(height: 18),
+                ),
               ],
-
-              const SectionHeader(title: 'Today'),
-              const DailyTipCard(),
             ],
           ),
         );
@@ -149,19 +191,11 @@ class _Overview extends ConsumerWidget {
 
 /// Something the app cannot work out on its own, with the reason it matters.
 class _Gap {
-  final IconData icon;
   final String title;
   final String body;
-  final String cta;
   final String route;
 
-  const _Gap({
-    required this.icon,
-    required this.title,
-    required this.body,
-    required this.cta,
-    required this.route,
-  });
+  const _Gap({required this.title, required this.body, required this.route});
 }
 
 /// Built from what is actually missing, not from a fixed checklist.
@@ -179,11 +213,9 @@ List<_Gap> _gaps({
   if (accounts.isEmpty) {
     return const [
       _Gap(
-        icon: Icons.account_balance_wallet_outlined,
         title: 'Add an account',
         body: 'Nothing can be worked out until the app knows where your money '
             'sits.',
-        cta: 'Add an account',
         route: '/accounts',
       ),
     ];
@@ -191,33 +223,27 @@ List<_Gap> _gaps({
 
   if (!hasSpending) {
     gaps.add(const _Gap(
-      icon: Icons.receipt_long_outlined,
       title: 'Log some spending',
       body: 'Without transactions there is no spending rate, so the app cannot '
           'tell you how long your money lasts.',
-      cta: 'Add a transaction',
       route: '/add',
     ));
   }
 
   if (snapshot.daysUntilIncome == null) {
     gaps.add(const _Gap(
-      icon: Icons.event_available_outlined,
       title: 'Record when you get paid',
-      body: 'Safe-to-spend is falling back to a flat 30 days. With a real income '
-          'date it becomes the amount that has to last until then.',
-      cta: 'Add expected income',
+      body: 'Safe-to-spend is falling back to a flat 30 days. With a real '
+          'income date it becomes the amount that has to last until then.',
       route: '/plan',
     ));
   }
 
   if (!obligations.any((o) => o.isActive && o.isOutflow)) {
     gaps.add(const _Gap(
-      icon: Icons.receipt_outlined,
       title: 'Add your bills',
-      body: 'Rent and subscriptions are counted as spendable right now, so your '
-          'safe-to-spend is higher than it really is.',
-      cta: 'Add a bill',
+      body: 'Rent and subscriptions are counted as spendable right now, so '
+          'your safe-to-spend is higher than it really is.',
       route: '/plan',
     ));
   }
@@ -225,12 +251,10 @@ List<_Gap> _gaps({
   // Only worth raising once there is more than one place money could come from.
   final spendable = accounts.where((a) => a.isSpendable).toList();
   if (spendable.length > 1 && spendable.every((a) => a.minBalance == 0)) {
-    gaps.add(const _Gap(
-      icon: Icons.shield_outlined,
-      title: 'Set a floor on an account',
+    gaps.add(_Gap(
+      title: 'Set a floor on ${spendable.first.name}',
       body: 'Nothing is protected, so a payment can be suggested from any '
           'account right down to zero.',
-      cta: 'Open accounts',
       route: '/accounts',
     ));
   }
@@ -238,46 +262,36 @@ List<_Gap> _gaps({
   return gaps;
 }
 
-class _GapCard extends StatelessWidget {
+class _GapRow extends StatelessWidget {
   final _Gap gap;
-  const _GapCard({required this.gap});
+  const _GapRow({required this.gap});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: () => context.push(gap.route),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+    final t = CediTokens.of(context);
+    return InkWell(
+      onTap: () => context.push(gap.route),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(gap.icon, size: 20, color: AppColors.seed),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(gap.title,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 14)),
-                  ),
+                  Text(gap.title,
+                      style: AppType.rowTitle.copyWith(color: t.ink)),
+                  const SizedBox(height: 4),
+                  Text(gap.body,
+                      style: AppType.rowSub
+                          .copyWith(height: 1.4, color: t.inkMuted)),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(gap.body,
-                  style: TextStyle(
-                      fontSize: 12.5, height: 1.45, color: cs.onSurfaceVariant)),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => context.push(gap.route),
-                  child: Text(gap.cta),
-                ),
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 12),
+            Icon(Icons.arrow_forward, size: 16, color: t.brandInk),
+          ],
         ),
       ),
     );
@@ -287,7 +301,8 @@ class _GapCard extends StatelessWidget {
 /// The figures worth knowing, each computed by the money engine.
 ///
 /// A tile is skipped when its input does not exist, rather than shown as a
-/// confident zero.
+/// confident zero. Money tiles put the currency code on its own line, the same
+/// way every other figure in the app does.
 class _NumbersGrid extends StatelessWidget {
   final MoneySnapshot snapshot;
   const _NumbersGrid({required this.snapshot});
@@ -295,122 +310,126 @@ class _NumbersGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = snapshot;
-    final tiles = <_Number>[];
+    final tiles = <_NumberTile>[];
 
     if (s.income30d > 0) {
-      final rate = (s.income30d - s.spend30d) / s.income30d * 100;
-      tiles.add(_Number(
-        label: 'Kept from income',
-        value: '${rate.toStringAsFixed(0)}%',
-        sub: '${formatMoney(s.income30d - s.spend30d)} of ${formatMoney(s.income30d)}',
-        color: rate >= 0 ? AppColors.income : AppColors.expense,
+      final kept = (s.income30d - s.spend30d) / s.income30d * 100;
+      tiles.add(_NumberTile(
+        label: 'Kept of income',
+        value: '${kept.round()}%',
       ));
     }
 
     if (s.dailyBurn > 0) {
-      tiles.add(_Number(
-        label: 'Spending a day',
-        value: formatMoney(s.dailyBurn),
-        sub: '${formatMoney(s.dailyBurn * 30)} a month at this rate',
-        color: AppColors.expense,
-      ));
+      tiles.add(_NumberTile(label: 'Spending a day', amount: s.dailyBurn));
     }
 
     if (s.runwayDays != null) {
-      tiles.add(_Number(
+      tiles.add(_NumberTile(
         label: 'Cash lasts',
         value: '${s.runwayDays!.floor()} days',
-        sub: s.daysUntilIncome == null
-            ? 'no income date recorded'
-            : 'income in ${s.daysUntilIncome} days',
-        color: s.willFallShort ? AppColors.expense : AppColors.seed,
       ));
-
-      // Months of cover only means something against a real monthly spend.
-      final monthly = s.dailyBurn * 30.44;
-      if (monthly > 0) {
-        final months = (s.liquid + s.reserved) / monthly;
-        tiles.add(_Number(
-          label: 'Buffer',
-          value: '${months.toStringAsFixed(1)} mo',
-          sub: 'of spending covered',
-          color: months >= 3 ? AppColors.income : AppColors.warning,
-        ));
-      }
     }
 
     if (s.committed > 0) {
-      tiles.add(_Number(
-        label: 'Committed',
-        value: formatMoney(s.committed),
-        sub: 'before ${dateLongFmt.format(s.horizon)}',
-        color: AppColors.warning,
+      tiles.add(_NumberTile(label: 'Committed', amount: s.committed));
+    }
+
+    final txnCount = s.categories.length;
+    if (txnCount > 0 && s.spend30d > 0) {
+      tiles.add(_NumberTile(
+        label: 'Biggest category',
+        value: s.categories.first.category,
+        small: true,
       ));
     }
 
     if (tiles.isEmpty) return const SizedBox.shrink();
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        child: Column(
+    // An odd tile out would leave a hole in a two-column grid, so the last one
+    // takes the full width instead.
+    final rows = <Widget>[];
+    for (var i = 0; i < tiles.length; i += 2) {
+      final left = tiles[i];
+      final right = i + 1 < tiles.length ? tiles[i + 1] : null;
+      // IntrinsicHeight, not bare `stretch`: this grid is a direct child of a
+      // ListView, which hands its children an unbounded height. A stretching
+      // Row would pass that straight down as a tight infinite constraint and
+      // the scroll extent would run off the end of the screen.
+      rows.add(IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (var i = 0; i < tiles.length; i++) ...[
-              _NumberRow(number: tiles[i]),
-              if (i < tiles.length - 1) const Divider(height: 1),
+            Expanded(child: left),
+            if (right != null) ...[
+              const SizedBox(width: 8),
+              Expanded(child: right),
             ],
           ],
         ),
-      ),
+      ));
+    }
+
+    return Column(
+      children: [
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          rows[i],
+        ],
+      ],
     );
   }
 }
 
-class _Number {
+class _NumberTile extends StatelessWidget {
   final String label;
-  final String value;
-  final String sub;
-  final Color color;
 
-  const _Number({
+  /// Either a plain [value] or a money [amount] — never both.
+  final String? value;
+  final double? amount;
+
+  /// Shrinks the figure for values that are words rather than numbers.
+  final bool small;
+
+  const _NumberTile({
     required this.label,
-    required this.value,
-    required this.sub,
-    required this.color,
+    this.value,
+    this.amount,
+    this.small = false,
   });
-}
-
-class _NumberRow extends StatelessWidget {
-  final _Number number;
-  const _NumberRow({required this.number});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
+    final t = CediTokens.of(context);
+    return CediCard(
+      padding: const EdgeInsets.all(13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(number.label,
-                    style: const TextStyle(
-                        fontSize: 13.5, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(number.sub,
-                    style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
-              ],
-            ),
-          ),
-          Text(
-            number.value,
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.4,
-              color: number.color,
+          Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.figureLabel
+                  .copyWith(fontSize: 11, height: 1.3, color: t.inkMuted)),
+          const SizedBox(height: 8),
+          if (amount != null) ...[
+            Text(kCurrencyCode,
+                style: AppType.currencyCode.copyWith(color: t.inkFaint)),
+            const SizedBox(height: 3),
+          ],
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              amount != null ? moneyDigits(amount!) : value!,
+              maxLines: 1,
+              softWrap: false,
+              style: AppType.figure.copyWith(
+                fontSize: small ? 16 : (amount != null ? 18 : 20),
+                letterSpacing: -0.4,
+                color: t.ink,
+              ),
             ),
           ),
         ],
@@ -419,63 +438,24 @@ class _NumberRow extends StatelessWidget {
   }
 }
 
-class _GoalProgress extends StatelessWidget {
+class _GoalMeter extends StatelessWidget {
   final Goal goal;
-  const _GoalProgress({required this.goal});
+  final int index;
+
+  const _GoalMeter({required this.goal, required this.index});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final monthly = goal.requiredMonthlyContribution;
-
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: () => context.push('/plan'),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(goal.name,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 14.5)),
-                  ),
-                  Text(
-                    '${(goal.progress * 100).round()}%',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800, fontSize: 14.5),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: goal.progress,
-                  minHeight: 8,
-                  backgroundColor: cs.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation(
-                      goal.isComplete ? AppColors.income : AppColors.seed),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                goal.isComplete
-                    ? 'Funded.'
-                    : monthly != null
-                        ? '${formatMoney(goal.remaining)} to go — '
-                            '${formatMoney(monthly)} a month to land on time.'
-                        : '${formatMoney(goal.remaining)} to go.',
-                style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
-              ),
-            ],
-          ),
-        ),
-      ),
+    final t = CediTokens.of(context);
+    return ProgressMeter(
+      label: goal.name,
+      trailing: '${moneyDigits(goal.savedAmount)} / ${moneyDigits(goal.targetAmount)}',
+      fraction: goal.progress,
+      color: goal.isComplete
+          ? t.income.ink
+          : index.isEven
+              ? t.brand
+              : t.protected,
     );
   }
 }

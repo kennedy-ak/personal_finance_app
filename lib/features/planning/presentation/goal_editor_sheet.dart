@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/components.dart';
+import '../../../core/design/sheets.dart';
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
 import '../../accounts/data/account_repository.dart';
@@ -20,9 +22,7 @@ class GoalEditorSheet extends ConsumerStatefulWidget {
       context: context,
       isScrollControlled: true,
       useRootNavigator: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (_) => GoalEditorSheet(goal: goal),
     );
   }
@@ -80,8 +80,8 @@ class _GoalEditorSheetState extends ConsumerState<GoalEditorSheet> {
     setState(() => _saving = true);
     final repo = ref.read(goalRepositoryProvider);
     try {
-      final target = double.parse(_targetCtrl.text);
-      final saved = double.tryParse(_savedCtrl.text) ?? 0;
+      final target = double.parse(_targetCtrl.text.replaceAll(',', ''));
+      final saved = double.tryParse(_savedCtrl.text.replaceAll(',', '')) ?? 0;
       if (_isNew) {
         await repo.create(
           name: _nameCtrl.text.trim(),
@@ -106,155 +106,162 @@ class _GoalEditorSheetState extends ConsumerState<GoalEditorSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not save this goal.')),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final t = CediTokens.of(context);
     final accounts = ref.watch(activeAccountsProvider).value ?? const <Account>[];
 
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 18,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
+    return SheetSurface(
       child: Form(
         key: _formKey,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: cs.outlineVariant,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                _isNew ? 'New goal' : 'Edit goal',
-                style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'What you set aside here stops counting as spendable money.',
-                style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 18),
-              TextFormField(
+              SheetHeader(title: _isNew ? 'New goal' : 'Edit goal'),
+              const SizedBox(height: 16),
+              SheetField(
+                label: 'Goal',
                 controller: _nameCtrl,
+                hint: 'Laptop',
                 textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  labelText: 'Name',
-                  hintText: 'e.g. Emergency fund',
-                  prefixIcon: Icon(Icons.flag_outlined),
-                ),
+                autofocus: _isNew,
                 validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
+                    (v == null || v.trim().isEmpty) ? 'Give it a name' : null,
               ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _targetCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Target',
-                  prefixText: 'GHS ',
-                  prefixIcon: Icon(Icons.flag),
-                ),
-                validator: (v) {
-                  final n = double.tryParse(v ?? '');
-                  if (n == null || n <= 0) return 'Enter a positive amount';
-                  return null;
-                },
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _savedCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Set aside so far',
-                  prefixText: 'GHS ',
-                  prefixIcon: Icon(Icons.savings_outlined),
-                  helperText: 'This is the amount held back from spendable money.',
-                  helperMaxLines: 2,
-                ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return null;
-                  final n = double.tryParse(v);
-                  if (n == null || n < 0) return 'Enter zero or more';
-                  return null;
-                },
-              ),
-              const SizedBox(height: 14),
-              InkWell(
-                onTap: _pickDate,
-                borderRadius: BorderRadius.circular(14),
-                child: InputDecorator(
-                  decoration: InputDecoration(
-                    labelText: 'Target date (optional)',
-                    prefixIcon: const Icon(Icons.event),
-                    suffixIcon: _targetDate == null
-                        ? const Icon(Icons.chevron_right)
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () => setState(() => _targetDate = null),
-                          ),
+              const SizedBox(height: 13),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: MoneyField(
+                      label: 'Target',
+                      controller: _targetCtrl,
+                      validator: (v) {
+                        final n =
+                            double.tryParse((v ?? '').replaceAll(',', ''));
+                        if (n == null || n <= 0) return 'Set a target';
+                        return null;
+                      },
+                    ),
                   ),
-                  child: Text(
-                    _targetDate == null
-                        ? 'No deadline'
-                        : dateLongFmt.format(_targetDate!),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: MoneyField(
+                      label: 'Saved',
+                      controller: _savedCtrl,
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<String?>(
-                initialValue:
-                    accounts.any((a) => a.id == _accountId) ? _accountId : null,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Where the money sits (optional)',
-                  prefixIcon: Icon(Icons.account_balance_wallet_outlined),
-                ),
-                items: [
-                  const DropdownMenuItem<String?>(
-                      value: null, child: Text('Not specified')),
-                  for (final a in accounts)
-                    DropdownMenuItem<String?>(value: a.id, child: Text(a.name)),
                 ],
-                onChanged: (v) => setState(() => _accountId = v),
               ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                  backgroundColor: AppColors.seed,
-                ),
+              const SizedBox(height: 13),
+              RowGroup(
+                children: [
+                  PickerRow(
+                    label: 'Target date',
+                    value: _targetDate == null
+                        ? 'None'
+                        : dateLongFmt.format(_targetDate!),
+                    onTap: _pickDate,
+                  ),
+                  if (accounts.isNotEmpty)
+                    PickerRow(
+                      label: 'Held in',
+                      value: accounts
+                              .where((a) => a.id == _accountId)
+                              .firstOrNull
+                              ?.name ??
+                          'Any account',
+                      onTap: () => _pickAccount(accounts),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 7),
+              Text(
+                'A goal is held back from safe-to-spend, so the money stops '
+                'being spent by accident.',
+                style: AppType.rowSub.copyWith(height: 1.4, color: t.inkFaint),
+              ),
+              const SizedBox(height: 20),
+              PrimaryButton(
+                label: _isNew ? 'Create goal' : 'Save goal',
+                loading: _saving,
                 onPressed: _saving ? null : _save,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.check),
-                label: Text(_isNew ? 'Add goal' : 'Save changes'),
               ),
+              if (!_isNew) ...[
+                const SizedBox(height: 10),
+                DangerButton(
+                  label: 'Delete goal',
+                  onPressed: _saving ? null : _delete,
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _pickAccount(List<Account> accounts) async {
+    final chosen = await showEditorSheet<String>(
+      context: context,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SheetHeader(title: 'Held in'),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              SelectChip(
+                label: 'Any account',
+                selected: _accountId == null,
+                onTap: () => Navigator.pop(ctx, '__any__'),
+              ),
+              for (final a in accounts)
+                SelectChip(
+                  label: a.name,
+                  selected: _accountId == a.id,
+                  onTap: () => Navigator.pop(ctx, a.id),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (chosen == null) return;
+    setState(() => _accountId = chosen == '__any__' ? null : chosen);
+  }
+
+  Future<void> _delete() async {
+    final goal = widget.goal!;
+    final ok = await showDeleteConfirmation(
+      context: context,
+      title: 'Delete "${goal.name}"?',
+      message: 'The ${formatMoney(goal.savedAmount)} held for it goes back '
+          'into safe-to-spend. Your balances do not change.',
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(goalRepositoryProvider).delete(goal.id);
+      bumpGoals(ref);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not delete this goal.')),
+      );
+    }
   }
 }

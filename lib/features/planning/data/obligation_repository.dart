@@ -7,7 +7,7 @@ import '../domain/obligation.dart';
 
 class ObligationRepository {
   Future<List<Obligation>> list() async {
-    final rows = await supabase.from('obligations').select().order('next_due');
+    final rows = await supabase.from('obligations').select().order('next_due', ascending: true);
     return (rows as List)
         .map((r) => Obligation.fromJson(r as Map<String, dynamic>))
         .toList();

@@ -10,8 +10,8 @@ class GoalRepository {
     final rows = await supabase
         .from('goals')
         .select()
-        .order('priority')
-        .order('created_at');
+        .order('priority', ascending: true)
+        .order('created_at', ascending: true);
     return (rows as List).map((r) => Goal.fromJson(r as Map<String, dynamic>)).toList();
   }
 

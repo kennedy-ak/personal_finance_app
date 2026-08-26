@@ -3,9 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/design/components.dart';
 import '../../../core/theme.dart';
-import '../../../shared/widgets/app_logo.dart';
 import '../data/auth_repository.dart';
+import 'auth_field.dart';
 
 const _kLastEmail = 'last_email';
 
@@ -23,6 +24,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _loading = false;
   bool _obscure = true;
   String? _error;
+  String? _notice;
 
   @override
   void initState() {
@@ -45,6 +47,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _notice = null;
     });
     try {
       final email = _emailCtrl.text.trim();
@@ -56,7 +59,42 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       await p.setString(_kLastEmail, email);
       if (mounted) context.go('/');
     } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('AuthApiException: ', ''));
+      setState(() => _error = _readable(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// Supabase says "Invalid login credentials", which does not tell anyone
+  /// which of the two fields to fix. The screen set answers that directly.
+  String _readable(Object e) {
+    final raw = e.toString().replaceFirst('AuthApiException: ', '');
+    if (raw.toLowerCase().contains('invalid login credentials')) {
+      return 'That password does not match this email. Try again or reset it.';
+    }
+    if (raw.toLowerCase().contains('email not confirmed')) {
+      return 'This email is not confirmed yet. Check your inbox for the link.';
+    }
+    return raw;
+  }
+
+  Future<void> _resetPassword() async {
+    final email = _emailCtrl.text.trim();
+    if (!email.contains('@')) {
+      setState(() => _error = 'Enter your email first, then tap reset.');
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await ref.read(authRepositoryProvider).sendPasswordReset(email);
+      if (mounted) {
+        setState(() => _notice = 'Reset link sent to $email.');
+      }
+    } catch (e) {
+      setState(() => _error = _readable(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -64,150 +102,128 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    final hasError = _error != null;
+
     return Scaffold(
-      body: Stack(
-        children: [
-          Container(
-            height: 320,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppColors.gradStart, AppColors.gradEnd],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-          ),
-          SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 460),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 36),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            blurRadius: 18,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: const AppLogo(size: 80),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Pursely',
-                      style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Track. Plan. Grow.',
-                      style: TextStyle(color: Colors.white70, fontSize: 13),
-                    ),
-                    const SizedBox(height: 36),
-                    Card(
-                      elevation: 6,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(22),
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              const Text('Welcome back',
-                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-                              const SizedBox(height: 4),
-                              Text('Sign in to continue',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                              const SizedBox(height: 22),
-                              TextFormField(
-                                controller: _emailCtrl,
-                                keyboardType: TextInputType.emailAddress,
-                                autofillHints: const [AutofillHints.email],
-                                decoration: const InputDecoration(
-                                  labelText: 'Email',
-                                  prefixIcon: Icon(Icons.email_outlined),
-                                ),
-                                validator: (v) =>
-                                    v == null || !v.contains('@') ? 'Enter a valid email' : null,
-                              ),
-                              const SizedBox(height: 12),
-                              TextFormField(
-                                controller: _passwordCtrl,
-                                obscureText: _obscure,
-                                autofillHints: const [AutofillHints.password],
-                                decoration: InputDecoration(
-                                  labelText: 'Password',
-                                  prefixIcon: const Icon(Icons.lock_outline),
-                                  suffixIcon: IconButton(
-                                    icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility),
-                                    onPressed: () => setState(() => _obscure = !_obscure),
-                                  ),
-                                ),
-                                validator: (v) =>
-                                    v == null || v.length < 6 ? 'Min 6 characters' : null,
-                              ),
-                              if (_error != null) ...[
-                                const SizedBox(height: 12),
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.expense.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      const Icon(Icons.error_outline,
-                                          color: AppColors.expense, size: 18),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(_error!,
-                                            style: const TextStyle(
-                                                color: AppColors.expense, fontSize: 12)),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 22),
-                              FilledButton(
-                                onPressed: _loading ? null : _submit,
-                                child: _loading
-                                    ? const SizedBox(
-                                        height: 18,
-                                        width: 18,
-                                        child: CircularProgressIndicator(
-                                            strokeWidth: 2, color: Colors.white))
-                                    : const Text('Sign in'),
-                              ),
-                              const SizedBox(height: 12),
-                              TextButton(
-                                onPressed: _loading ? null : () => context.push('/signup'),
-                                child: const Text("Don't have an account? Create one"),
-                              ),
-                            ],
+      backgroundColor: t.canvas,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                            alignment: Alignment.centerLeft,
+                            onPressed: () => context.go('/splash'),
+                            icon: Icon(Icons.arrow_back,
+                                size: 22, color: t.inkMuted),
                           ),
                         ),
-                      ),
+                        const SizedBox(height: 24),
+                        Text('Welcome back',
+                            style: AppType.display.copyWith(color: t.ink)),
+                        const SizedBox(height: 26),
+                        AuthField(
+                          label: 'Email',
+                          controller: _emailCtrl,
+                          hint: 'you@example.com',
+                          keyboardType: TextInputType.emailAddress,
+                          autofillHints: const [AutofillHints.email],
+                          validator: (v) => v == null || !v.contains('@')
+                              ? 'Enter a valid email'
+                              : null,
+                        ),
+                        const SizedBox(height: 16),
+                        AuthField(
+                          label: 'Password',
+                          controller: _passwordCtrl,
+                          obscure: _obscure,
+                          // The message lives in the banner below, so the
+                          // field only carries the red border — one screen
+                          // should not say the same thing twice.
+                          hasError: hasError,
+                          autofillHints: const [AutofillHints.password],
+                          onToggleObscure: () =>
+                              setState(() => _obscure = !_obscure),
+                          validator: (v) => v == null || v.length < 6
+                              ? 'Min 6 characters'
+                              : null,
+                          onSubmitted: (_) => _submit(),
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 16),
+                          AlertCard(
+                            tone: AlertTone.critical,
+                            eyebrow: 'Could not sign in',
+                            message: _error!,
+                          ),
+                        ],
+                        if (_notice != null) ...[
+                          const SizedBox(height: 16),
+                          AlertCard(
+                            tone: AlertTone.info,
+                            eyebrow: 'Check your email',
+                            message: _notice!,
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _loading ? null : _resetPassword,
+                            child: Text('Forgot password',
+                                style: AppType.label
+                                    .copyWith(fontSize: 13, color: t.brandInk)),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                PrimaryButton(
+                  label: 'Log in',
+                  loading: _loading,
+                  onPressed: _loading ? null : _submit,
+                ),
+                const SizedBox(height: 14),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _loading ? null : () => context.push('/signup'),
+                  child: Text.rich(
+                    TextSpan(
+                      text: 'New here? ',
+                      style: AppType.bodySmall.copyWith(
+                          fontSize: 14, height: 1.0, color: t.inkMuted),
+                      children: [
+                        TextSpan(
+                          text: 'Create an account',
+                          style: AppType.label
+                              .copyWith(fontSize: 14, color: t.brandInk),
+                        ),
+                      ],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

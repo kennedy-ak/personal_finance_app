@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/design/components.dart';
 import '../../../core/finance/snapshot_provider.dart';
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
-import '../../../shared/widgets/section_header.dart';
 import '../../accounts/data/account_repository.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../planning/data/goal_repository.dart';
@@ -18,153 +18,134 @@ import 'widgets/money_placement_bar.dart';
 import 'widgets/safe_to_spend_hero.dart';
 import 'widgets/spending_movement.dart';
 
+/// One screen, one question: what can I spend, and is anything about to break?
+///
+/// It has two shapes. The ordinary one reports and then offers the pay
+/// question. The shortfall one stops reporting, names what would close the
+/// gap, and puts the two things you can do about it under your thumb.
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = CediTokens.of(context);
     final snapshotAsync = ref.watch(moneySnapshotProvider);
     final alertsAsync = ref.watch(moneyAlertsProvider);
     final txns = ref.watch(transactionsProvider);
     final accounts = ref.watch(accountsProvider);
-    final user = ref.watch(authRepositoryProvider).currentUser;
-    final email = user?.email ?? '';
-    final firstName = email.split('@').first;
-    final hour = DateTime.now().hour;
-    final greet = hour < 12
-        ? 'Good morning'
-        : hour < 17
-            ? 'Good afternoon'
-            : 'Good evening';
+    final name = ref.watch(authRepositoryProvider).displayName;
+    final snapshot = snapshotAsync.value;
+    final shortfall = snapshot != null && snapshot.safeToSpend < 0;
 
     return Scaffold(
+      backgroundColor: t.canvas,
       body: SafeArea(
+        bottom: false,
         child: RefreshIndicator(
           onRefresh: () => _refresh(ref),
+          color: t.brandInk,
+          backgroundColor: t.card,
           child: ListView(
             // Bottom padding clears the docked add button, which otherwise
             // sits on top of the last card.
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 112),
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(greet,
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                        const SizedBox(height: 2),
-                        Text(
-                          firstName,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.4,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.refresh),
-                    onPressed: () => _refresh(ref),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.settings_outlined),
-                    onPressed: () => context.push('/settings'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
+              _Greeting(name: name, onRefresh: () => _refresh(ref)),
+              const SizedBox(height: 20),
 
               // What you can actually spend, and whether it will hold.
               snapshotAsync.when(
                 data: (s) => SafeToSpendHero(snapshot: s),
-                loading: () => const SizedBox(
-                    height: 190, child: Center(child: CircularProgressIndicator())),
-                error: (e, _) => _ErrorCard(message: '$e'),
-              ),
-              const SizedBox(height: 12),
-
-              // The question the app exists to answer, one tap away.
-              OutlinedButton.icon(
-                onPressed: () => context.push('/pay'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                  foregroundColor: AppColors.seed,
-                  side: BorderSide(color: AppColors.seed.withValues(alpha: 0.45)),
+                loading: () => const _HeroSkeleton(),
+                error: (e, _) => ErrorCard(
+                  title: 'Could not work out your position',
+                  message: '$e',
+                  onRetry: () => _refresh(ref),
                 ),
-                icon: const Icon(Icons.alt_route, size: 20),
-                label: const Text('I need to pay someone — where from?',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
               ),
-              const SizedBox(height: 16),
+
+              if (!shortfall) ...[
+                const SizedBox(height: 20),
+                // The question the app exists to answer, one tap away.
+                BrandPromptButton(
+                  label: 'I need to pay someone — where from?',
+                  onPressed: () => context.push('/pay'),
+                ),
+              ],
 
               // What the app has noticed, before anything it merely reports.
               alertsAsync.maybeWhen(
-                data: (alerts) => AlertList(alerts: alerts),
+                data: (alerts) => alerts.isEmpty
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 20),
+                        child: AlertList(
+                          alerts: alerts,
+                          heading: shortfall
+                              ? 'What closes the gap'
+                              : 'Needs a decision',
+                        ),
+                      ),
                 orElse: () => const SizedBox.shrink(),
               ),
 
-              snapshotAsync.maybeWhen(
-                data: (s) => Padding(
-                  padding: const EdgeInsets.only(bottom: 22),
-                  child: MoneyPlacementBar(snapshot: s),
+              // In the shortfall case the actions come before the reporting.
+              // Nothing below this point changes what the user should do next.
+              if (shortfall) ...[
+                const SizedBox(height: 20),
+                PrimaryButton(
+                  label: 'Work through the gap',
+                  onPressed: () => context.push('/plan'),
                 ),
-                orElse: () => const SizedBox.shrink(),
-              ),
+                const SizedBox(height: 9),
+                SecondaryButton(
+                  label: 'I need to pay someone — where from?',
+                  filled: Theme.of(context).brightness == Brightness.light,
+                  onPressed: () => context.push('/pay'),
+                ),
+              ],
 
-              const SectionHeader(title: 'Spending'),
-              snapshotAsync.when(
-                data: (s) => SpendingMovement(snapshot: s),
-                loading: () => const SizedBox(
-                    height: 160, child: Center(child: CircularProgressIndicator())),
-                error: (e, _) => _ErrorCard(message: '$e'),
-              ),
-              const SizedBox(height: 22),
+              if (snapshot != null) ...[
+                const SizedBox(height: 20),
+                MoneyPlacementBar(snapshot: snapshot),
+                const SizedBox(height: 20),
+                SpendingMovement(snapshot: snapshot),
+              ],
 
-              SectionHeader(
-                title: 'Recent transactions',
+              const SizedBox(height: 20),
+              SectionRow(
+                title: 'Recent',
                 action: 'See all',
                 onAction: () => context.go('/history'),
               ),
+              const SizedBox(height: 8),
               txns.when(
                 data: (list) {
                   final recent = list.take(4).toList();
                   if (recent.isEmpty) {
-                    return Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Row(
-                          children: [
-                            Icon(Icons.receipt_long_outlined,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant),
-                            const SizedBox(width: 12),
-                            const Expanded(child: Text('No transactions yet.')),
-                          ],
-                        ),
-                      ),
+                    return EmptyCard(
+                      title: 'Nothing here yet',
+                      message: 'Add your first transaction and the dashboard '
+                          'starts working.',
+                      actionLabel: 'Add transaction',
+                      onAction: () => context.push('/add'),
                     );
                   }
                   final names = (accounts.value ?? [])
                       .fold<Map<String, String>>({}, (m, a) => m..[a.id] = a.name);
-                  return Card(
-                    child: Column(
-                      children: [
-                        for (var i = 0; i < recent.length; i++) ...[
-                          _TxnTile(t: recent[i], names: names),
-                          if (i < recent.length - 1)
-                            const Divider(height: 1, indent: 64, endIndent: 12),
-                        ],
-                      ],
-                    ),
+                  return RowGroup(
+                    children: [
+                      for (final txn in recent)
+                        _TxnTile(t: txn, names: names),
+                    ],
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => _ErrorCard(message: '$e'),
+                loading: () => const _RowsSkeleton(),
+                error: (e, _) => ErrorCard(
+                  title: 'Could not load your transactions',
+                  message: 'Check your connection and try again.',
+                  onRetry: () => _refresh(ref),
+                ),
               ),
             ],
           ),
@@ -187,6 +168,64 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
+/// Time of day plus a first name. It is the one place the app is warm, and it
+/// earns that by being the only place.
+class _Greeting extends StatelessWidget {
+  final String? name;
+  final VoidCallback onRefresh;
+
+  const _Greeting({required this.name, required this.onRefresh});
+
+  static String _dayPart(DateTime now) {
+    final weekday = <String>[
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ][now.weekday - 1];
+    final part = now.hour < 12
+        ? 'morning'
+        : now.hour < 17
+            ? 'afternoon'
+            : 'evening';
+    return '$weekday $part';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_dayPart(DateTime.now()),
+                  style: AppType.bodySmall
+                      .copyWith(height: 1.0, color: t.inkMuted)),
+              const SizedBox(height: 5),
+              Text(
+                name == null ? 'Hello' : 'Hello, $name',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppType.title.copyWith(color: t.ink),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        IconAction(
+            icon: Icons.refresh, tooltip: 'Refresh', onPressed: onRefresh),
+        const SizedBox(width: 8),
+        IconAction(
+          icon: Icons.settings_outlined,
+          tooltip: 'Settings',
+          onPressed: () => context.push('/settings'),
+        ),
+      ],
+    );
+  }
+}
+
 class _TxnTile extends StatelessWidget {
   final Txn t;
   final Map<String, String> names;
@@ -194,54 +233,77 @@ class _TxnTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = colorForTxn(t.type);
+    final tokens = CediTokens.of(context);
     final accountName = names[t.accountId];
+    final transfer = t.type == TxnType.transfer;
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      leading: Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(12),
+    final color = switch (t.type) {
+      TxnType.income => tokens.income.ink,
+      TxnType.expense => tokens.expense.ink,
+      TxnType.transfer => tokens.inkMuted,
+    };
+
+    return TxnRow(
+      leading: CategoryGlyph(
+        name: t.category,
+        hue: t.category.hashCode,
+        neutral: transfer,
+      ),
+      title: titleForTxn(t, fromName: accountName, toName: names[t.toAccountId]),
+      subtitle: [
+        ?accountName,
+        dayMonthFmt.format(t.date),
+      ].join(' · '),
+      amount: '${signForTxn(t.type)}${formatMoney(t.amount)}',
+      amountColor: color,
+    );
+  }
+}
+
+class _HeroSkeleton extends StatelessWidget {
+  const _HeroSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    return Container(
+      height: 226,
+      decoration: BoxDecoration(
+        color: t.card,
+        borderRadius: Radii.lg,
+        border: Border.all(color: t.hairline),
+      ),
+      child: Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2, color: t.brandInk),
         ),
-        child: Icon(iconForTxn(t), color: color, size: 22),
-      ),
-      title: Text(
-        titleForTxn(t, fromName: accountName, toName: names[t.toAccountId]),
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-      ),
-      subtitle: Text(
-        '${dateLongFmt.format(t.date)}${accountName != null ? ' • $accountName' : ''}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 12),
-      ),
-      trailing: Text(
-        '${signForTxn(t.type)}${formatMoney(t.amount)}',
-        style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 14),
       ),
     );
   }
 }
 
-class _ErrorCard extends StatelessWidget {
-  final String message;
-  const _ErrorCard({required this.message});
+class _RowsSkeleton extends StatelessWidget {
+  const _RowsSkeleton();
 
   @override
-  Widget build(BuildContext context) => Card(
-        color: AppColors.expense.withValues(alpha: 0.08),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              const Icon(Icons.error_outline, color: AppColors.expense),
-              const SizedBox(width: 12),
-              Expanded(child: Text(message, style: const TextStyle(fontSize: 12.5))),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    return Container(
+      height: 120,
+      decoration: BoxDecoration(
+        color: t.card,
+        borderRadius: Radii.md,
+        border: Border.all(color: t.hairline),
+      ),
+      child: Center(
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2, color: t.brandInk),
         ),
-      );
+      ),
+    );
+  }
 }

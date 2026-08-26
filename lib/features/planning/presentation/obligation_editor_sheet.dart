@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/components.dart';
+import '../../../core/design/sheets.dart';
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
 import '../../accounts/data/account_repository.dart';
@@ -21,9 +23,7 @@ class ObligationEditorSheet extends ConsumerStatefulWidget {
       context: context,
       isScrollControlled: true,
       useRootNavigator: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (_) => ObligationEditorSheet(obligation: obligation),
     );
   }
@@ -84,7 +84,7 @@ class _ObligationEditorSheetState extends ConsumerState<ObligationEditorSheet> {
     setState(() => _saving = true);
     final repo = ref.read(obligationRepositoryProvider);
     try {
-      final amount = double.parse(_amountCtrl.text);
+      final amount = double.parse(_amountCtrl.text.replaceAll(',', ''));
       if (_isNew) {
         await repo.create(
           name: _nameCtrl.text.trim(),
@@ -112,184 +112,286 @@ class _ObligationEditorSheetState extends ConsumerState<ObligationEditorSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not save this commitment.')),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final t = CediTokens.of(context);
     final accounts = ref.watch(activeAccountsProvider).value ?? const <Account>[];
-    final isBill = _direction == ObligationDirection.out;
+    final categories = _direction == ObligationDirection.out
+        ? ref.watch(expenseCategoryNamesProvider)
+        : ref.watch(incomeCategoryNamesProvider);
+    final out = _direction == ObligationDirection.out;
 
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 18,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
+    return SheetSurface(
       child: Form(
         key: _formKey,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: cs.outlineVariant,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                _isNew ? 'New commitment' : 'Edit commitment',
-                style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Anything the app should count before calling money spendable.',
-                style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 18),
-              SegmentedButton<ObligationDirection>(
-                segments: const [
-                  ButtonSegment(
-                    value: ObligationDirection.out,
-                    icon: Icon(Icons.arrow_upward, size: 16),
-                    label: Text('Bill'),
-                  ),
-                  ButtonSegment(
-                    value: ObligationDirection.incoming,
-                    icon: Icon(Icons.arrow_downward, size: 16),
-                    label: Text('Income'),
-                  ),
+              SheetHeader(
+                  title: _isNew ? 'New commitment' : 'Edit commitment'),
+              const SizedBox(height: 16),
+              SegmentedChips<ObligationDirection>(
+                options: const [
+                  (ObligationDirection.out, 'Bill'),
+                  (ObligationDirection.incoming, 'Income'),
                 ],
-                selected: {_direction},
-                onSelectionChanged: (s) => setState(() {
-                  _direction = s.first;
+                selected: _direction,
+                onChanged: (d) => setState(() {
+                  _direction = d;
                   _category = null;
                 }),
               ),
-              const SizedBox(height: 16),
-              TextFormField(
+              const SizedBox(height: 13),
+              SheetField(
+                label: 'What is it',
                 controller: _nameCtrl,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  labelText: 'Name',
-                  hintText: isBill ? 'e.g. Rent' : 'e.g. Salary',
-                  prefixIcon: const Icon(Icons.label_outline),
-                ),
+                hint: out ? 'Rent' : 'Salary',
+                autofocus: _isNew,
                 validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
+                    (v == null || v.trim().isEmpty) ? 'Give it a name' : null,
               ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  prefixText: 'GHS ',
-                  prefixIcon: Icon(Icons.payments_outlined),
-                ),
-                validator: (v) {
-                  final n = double.tryParse(v ?? '');
-                  if (n == null || n <= 0) return 'Enter a positive amount';
-                  return null;
-                },
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<Cadence>(
-                initialValue: _cadence,
-                decoration: const InputDecoration(
-                  labelText: 'How often',
-                  prefixIcon: Icon(Icons.repeat),
-                ),
-                items: [
-                  for (final c in Cadence.values)
-                    DropdownMenuItem(value: c, child: Text(c.label)),
-                ],
-                onChanged: (v) => setState(() => _cadence = v ?? _cadence),
-              ),
-              const SizedBox(height: 14),
-              InkWell(
-                onTap: _pickDate,
-                borderRadius: BorderRadius.circular(14),
-                child: InputDecorator(
-                  decoration: InputDecoration(
-                    labelText: _cadence == Cadence.once
-                        ? 'Date'
-                        : 'Next time it lands',
-                    prefixIcon: const Icon(Icons.event),
-                    suffixIcon: const Icon(Icons.chevron_right),
-                  ),
-                  child: Text(dateLongFmt.format(_nextDue)),
-                ),
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<String?>(
-                initialValue:
-                    accounts.any((a) => a.id == _accountId) ? _accountId : null,
-                isExpanded: true,
-                decoration: InputDecoration(
-                  labelText: isBill ? 'Paid from' : 'Arrives in',
-                  prefixIcon: const Icon(Icons.account_balance_wallet_outlined),
-                  helperText: 'Optional — helps the coach pick the right account.',
-                  helperMaxLines: 2,
-                ),
-                items: [
-                  const DropdownMenuItem<String?>(
-                      value: null, child: Text('Not decided')),
-                  for (final a in accounts)
-                    DropdownMenuItem<String?>(value: a.id, child: Text(a.name)),
-                ],
-                onChanged: (v) => setState(() => _accountId = v),
-              ),
-              if (isBill) ...[
-                const SizedBox(height: 14),
-                Builder(builder: (_) {
-                  final categories = ref.watch(expenseCategoryNamesProvider);
-                  return DropdownButtonFormField<String?>(
-                    initialValue:
-                        categories.contains(_category) ? _category : null,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Category (optional)',
-                      prefixIcon: Icon(Icons.category_outlined),
+              const SizedBox(height: 13),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: MoneyField(
+                      label: 'Amount',
+                      controller: _amountCtrl,
+                      validator: (v) {
+                        final n =
+                            double.tryParse((v ?? '').replaceAll(',', ''));
+                        if (n == null || n <= 0) return 'Enter an amount';
+                        return null;
+                      },
                     ),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                          value: null, child: Text('None')),
-                      for (final c in categories)
-                        DropdownMenuItem<String?>(value: c, child: Text(c)),
-                    ],
-                    onChanged: (v) => setState(() => _category = v),
-                  );
-                }),
-              ],
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                  backgroundColor: isBill ? AppColors.expense : AppColors.income,
-                ),
-                onPressed: _saving ? null : _save,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.check),
-                label: Text(_isNew ? 'Add commitment' : 'Save changes'),
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: LabeledField(
+                      label: 'Repeats',
+                      child: _PickerBox(
+                        value: _cadence.label,
+                        onTap: _pickCadence,
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 13),
+              RowGroup(
+                children: [
+                  PickerRow(
+                    label: 'Next due',
+                    value: dateLongFmt.format(_nextDue),
+                    onTap: _pickDate,
+                  ),
+                  PickerRow(
+                    label: out ? 'Leaves from' : 'Lands in',
+                    value: accounts
+                            .where((a) => a.id == _accountId)
+                            .firstOrNull
+                            ?.name ??
+                        'Any account',
+                    onTap: () => _pickAccount(accounts),
+                  ),
+                  if (categories.isNotEmpty)
+                    PickerRow(
+                      label: 'Category',
+                      value: _category ?? 'None',
+                      onTap: () => _pickCategory(categories),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 7),
+              Text(
+                out
+                    ? 'Pinning it to an account is what lets the app warn you '
+                        'when that account cannot cover it.'
+                    : 'The next due date sets the horizon for safe-to-spend.',
+                style: AppType.rowSub.copyWith(height: 1.4, color: t.inkFaint),
+              ),
+              const SizedBox(height: 20),
+              PrimaryButton(
+                label: _isNew ? 'Create commitment' : 'Save commitment',
+                loading: _saving,
+                onPressed: _saving ? null : _save,
+              ),
+              if (!_isNew) ...[
+                const SizedBox(height: 10),
+                DangerButton(
+                  label: 'Delete commitment',
+                  onPressed: _saving ? null : _delete,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickCadence() async {
+    final chosen = await showEditorSheet<Cadence>(
+      context: context,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SheetHeader(title: 'How often'),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              for (final c in Cadence.values)
+                SelectChip(
+                  label: c.label,
+                  selected: c == _cadence,
+                  onTap: () => Navigator.pop(ctx, c),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (chosen != null) setState(() => _cadence = chosen);
+  }
+
+  Future<void> _pickAccount(List<Account> accounts) async {
+    final chosen = await showEditorSheet<String>(
+      context: context,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+              title: _direction == ObligationDirection.out
+                  ? 'Leaves from'
+                  : 'Lands in'),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              SelectChip(
+                label: 'Any account',
+                selected: _accountId == null,
+                onTap: () => Navigator.pop(ctx, '__any__'),
+              ),
+              for (final a in accounts)
+                SelectChip(
+                  label: a.name,
+                  selected: _accountId == a.id,
+                  onTap: () => Navigator.pop(ctx, a.id),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (chosen == null) return;
+    setState(() => _accountId = chosen == '__any__' ? null : chosen);
+  }
+
+  Future<void> _pickCategory(List<String> categories) async {
+    final chosen = await showEditorSheet<String>(
+      context: context,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SheetHeader(title: 'Category'),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              SelectChip(
+                label: 'None',
+                selected: _category == null,
+                onTap: () => Navigator.pop(ctx, '__none__'),
+              ),
+              for (final c in categories)
+                SelectChip(
+                  label: c,
+                  selected: _category == c,
+                  onTap: () => Navigator.pop(ctx, c),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (chosen == null) return;
+    setState(() => _category = chosen == '__none__' ? null : chosen);
+  }
+
+  Future<void> _delete() async {
+    final o = widget.obligation!;
+    final ok = await showDeleteConfirmation(
+      context: context,
+      title: 'Delete "${o.name}"?',
+      message: '${formatMoney(o.amount)} stops being held back, so your '
+          'safe-to-spend goes up by that much. Your balances do not change.',
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(obligationRepositoryProvider).delete(o.id);
+      bumpObligations(ref);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not delete this commitment.')),
+      );
+    }
+  }
+}
+
+/// A field-shaped box that opens a picker — used where a value belongs beside
+/// another field rather than in a row group.
+class _PickerBox extends StatelessWidget {
+  final String value;
+  final VoidCallback onTap;
+
+  const _PickerBox({required this.value, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    return Material(
+      color: t.field,
+      borderRadius: Radii.sm,
+      child: InkWell(
+        borderRadius: Radii.sm,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 15),
+          decoration: BoxDecoration(
+            borderRadius: Radii.sm,
+            border: Border.all(color: t.fieldBorder),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.body
+                        .copyWith(fontSize: 15, height: 1.0, color: t.ink)),
+              ),
+              Icon(Icons.expand_more, size: 18, color: t.inkMuted),
             ],
           ),
         ),

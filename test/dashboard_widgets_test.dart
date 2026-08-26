@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:personal_finance_app/core/design/components.dart';
 import 'package:personal_finance_app/core/finance/alerts.dart';
 import 'package:personal_finance_app/core/finance/money_engine.dart';
 import 'package:personal_finance_app/features/accounts/domain/account.dart';
@@ -45,9 +46,11 @@ void main() {
 
       await pump(tester, SafeToSpendHero(snapshot: s));
 
-      expect(find.text('GHS 1,800.00'), findsOneWidget); // 3000 - 1200
-      expect(find.textContaining('Safe to spend'), findsOneWidget);
-      expect(find.textContaining('Income lands in 16 days'), findsOneWidget);
+      // The code and the digits are drawn separately so a long figure can
+      // never truncate.
+      expect(find.text('1,800.00'), findsOneWidget); // 3000 - 1200
+      expect(find.text('SAFE TO SPEND'), findsOneWidget);
+      expect(find.textContaining('16 days'), findsOneWidget);
     });
 
     testWidgets('says plainly when the money runs out first', (tester) async {
@@ -76,7 +79,10 @@ void main() {
 
       await pump(tester, SafeToSpendHero(snapshot: s));
 
-      expect(find.textContaining('GHS 500.00 more than you have spare'),
+      expect(find.text('SHORT BEFORE PAYDAY'), findsOneWidget);
+      expect(find.text('-GHS'), findsOneWidget);
+      expect(find.text('500.00'), findsOneWidget);
+      expect(find.textContaining('Something has to move or wait'),
           findsOneWidget);
     });
 
@@ -112,11 +118,13 @@ void main() {
 
       await pump(tester, MoneyPlacementBar(snapshot: s));
 
-      expect(find.text('Where your money is'), findsOneWidget);
-      expect(find.text('Spendable'), findsOneWidget);
-      expect(find.text('Locked'), findsOneWidget);
-      expect(find.text('Reserved'), findsOneWidget);
-      expect(find.text('GHS 5,000.00'), findsOneWidget); // the locked slice
+      expect(find.text('Where your money sits'), findsOneWidget);
+      expect(find.text('Liquid'), findsOneWidget);
+      expect(find.text('Committed'), findsOneWidget);
+      // Locked, reserved and floors are one band: what you cannot spend this
+      // week is a single fact, not four.
+      expect(find.text('Protected'), findsOneWidget);
+      expect(find.text('GHS 5,900.00'), findsOneWidget); // 5,000 + 900
     });
 
     testWidgets('segments still add up when bills exceed the cash',
@@ -133,8 +141,8 @@ void main() {
 
       await pump(tester, MoneyPlacementBar(snapshot: s));
 
-      // Nothing is shown as spendable, and the gap is stated outright.
-      expect(find.text('Spendable'), findsNothing);
+      // Nothing is shown as liquid, and the gap is stated outright.
+      expect(find.text('Liquid'), findsNothing);
       expect(find.textContaining('exceed your spendable money by GHS 500.00'),
           findsOneWidget);
     });
@@ -175,21 +183,28 @@ void main() {
         ),
       ];
 
-      await pump(tester, const AlertList(alerts: alerts));
+      await pump(tester, const AlertList(alerts: alerts, collapsedCount: 2));
 
+      expect(find.text('Needs a decision'), findsOneWidget);
       expect(find.text('First'), findsOneWidget);
       expect(find.text('Second'), findsOneWidget);
       expect(find.text('Third'), findsNothing);
+
+      // The scale reads as three steps, not three shades of red.
+      expect(find.text('NOT COVERED'), findsOneWidget);
+      expect(find.text('TIGHT'), findsOneWidget);
 
       await tester.tap(find.text('1 more'));
       await tester.pumpAndSettle();
 
       expect(find.text('Third'), findsOneWidget);
+      expect(find.text('FOR INFO'), findsOneWidget);
     });
 
     testWidgets('renders nothing when there is nothing to say', (tester) async {
       await pump(tester, const AlertList(alerts: []));
-      expect(find.byType(Card), findsNothing);
+      expect(find.byType(AlertCard), findsNothing);
+      expect(find.text('Needs a decision'), findsNothing);
     });
   });
 
@@ -208,7 +223,10 @@ void main() {
       await pump(tester, SpendingMovement(snapshot: s));
 
       expect(find.text('Food & Dining'), findsOneWidget);
-      expect(find.text('100%'), findsOneWidget); // doubled since last month
+      // Once for the month's total and once for the only category in it —
+      // with a single category the two figures are the same number.
+      expect(find.text('+100%'), findsNWidgets(2)); // doubled since last month
+      expect(find.text('600.00'), findsOneWidget);
     });
 
     testWidgets('says so when nothing has been spent', (tester) async {

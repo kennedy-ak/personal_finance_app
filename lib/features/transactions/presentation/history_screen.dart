@@ -3,18 +3,25 @@ import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../../core/category_icons.dart';
+import '../../../core/design/components.dart';
+import '../../../core/design/sheets.dart';
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
-import '../../../shared/widgets/section_header.dart';
 import '../../accounts/data/account_repository.dart';
 import '../data/transaction_repository.dart';
 import '../domain/transaction.dart';
+import 'history_filter_sheet.dart';
 import 'txn_style.dart';
 
+/// The ledger, grouped by day.
+///
+/// A flat list of 124 rows is a wall. Grouping by day with a subtotal per day
+/// turns it into something you can scan: most people are looking for a
+/// particular day's damage, not a particular row.
 class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
 
@@ -23,13 +30,185 @@ class HistoryScreen extends ConsumerStatefulWidget {
 }
 
 class _HistoryScreenState extends ConsumerState<HistoryScreen> {
-  TxnType? _typeFilter;
-  String? _categoryFilter;
-  String? _accountFilter;
-  DateTimeRange? _range;
+  final _searchCtrl = TextEditingController();
+  HistoryFilters _filters = const HistoryFilters();
   String _search = '';
 
-  Future<void> _exportCsv(List<Txn> rows, Map<String, String> accountNames) async {
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    final txns = ref.watch(transactionsProvider);
+    final accounts = ref.watch(accountsProvider);
+    final names = {
+      for (final a in accounts.value ?? []) a.id as String: a.name as String,
+    };
+
+    return Scaffold(
+      backgroundColor: t.canvas,
+      body: SafeArea(
+        bottom: false,
+        child: txns.when(
+          loading: () =>
+              Center(child: CircularProgressIndicator(color: t.brandInk)),
+          error: (e, _) => Padding(
+            padding: const EdgeInsets.all(16),
+            child: ErrorCard(
+              title: 'Could not load your transactions',
+              message: 'Check your connection and try again.',
+              onRetry: () => bumpTransactions(ref),
+            ),
+          ),
+          data: (all) {
+            final filtered = _filter(all, names);
+            final days = _groupByDay(filtered);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text('History',
+                                style: AppType.title.copyWith(color: t.ink)),
+                          ),
+                          Text(
+                            '${filtered.length} ${filtered.length == 1 ? 'ROW' : 'ROWS'}',
+                            style: AppType.monoCaption
+                                .copyWith(fontSize: 12, color: t.inkFaint),
+                          ),
+                          if (filtered.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            IconButton(
+                              tooltip: 'Export CSV',
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(Icons.ios_share,
+                                  size: 19, color: t.inkMuted),
+                              onPressed: () => _exportCsv(filtered, names),
+                            ),
+                          ],
+                        ],
+                      ),
+                      if (all.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        SearchRow(
+                          controller: _searchCtrl,
+                          hint: 'Search description or amount',
+                          filterCount: _filters.count,
+                          onChanged: (v) => setState(() => _search = v),
+                          onFilter: () => _openFilters(all, names),
+                        ),
+                      ],
+                      if (_filters.count > 0) ...[
+                        const SizedBox(height: 12),
+                        _ActiveFilters(
+                          filters: _filters,
+                          accountNames: names,
+                          onChanged: (f) => setState(() => _filters = f),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: all.isEmpty
+                      ? _EmptyHistory(onAdd: () => context.push('/add'))
+                      : filtered.isEmpty
+                          ? _NoResults(
+                              query: _search,
+                              filterCount: _filters.count,
+                              total: all.length,
+                              onClear: () => setState(() {
+                                _filters = const HistoryFilters();
+                                _search = '';
+                                _searchCtrl.clear();
+                              }),
+                            )
+                          : RefreshIndicator(
+                              color: t.brandInk,
+                              backgroundColor: t.card,
+                              onRefresh: () async {
+                                bumpTransactions(ref);
+                                await ref.read(transactionsProvider.future);
+                              },
+                              child: ListView.builder(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 4, 16, 112),
+                                itemCount: days.length,
+                                itemBuilder: (_, i) => Padding(
+                                  padding:
+                                      EdgeInsets.only(top: i == 0 ? 6 : 18),
+                                  child: _DayGroup(
+                                    day: days[i],
+                                    names: names,
+                                    onTap: _showDetails,
+                                  ),
+                                ),
+                              ),
+                            ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFilters(
+      List<Txn> all, Map<String, String> names) async {
+    final accounts = ref.read(accountsProvider).value ?? [];
+    final categories = all.map((t) => t.category).toSet().toList()..sort();
+
+    final result = await showHistoryFilterSheet(
+      context: context,
+      current: _filters,
+      accounts: {for (final a in accounts) a.id: a.name},
+      categories: categories,
+      countFor: (f) => _filter(all, names, override: f).length,
+    );
+    if (result != null) setState(() => _filters = result);
+  }
+
+  List<Txn> _filter(List<Txn> list, Map<String, String> names,
+      {HistoryFilters? override}) {
+    final f = override ?? _filters;
+    final s = _search.trim().toLowerCase();
+    return list.where((t) {
+      if (!f.matches(t)) return false;
+      if (s.isEmpty) return true;
+      // Amount is searchable too: people remember "that 264 one" far more
+      // often than they remember what they typed in the note.
+      final hay = '${t.category} ${t.description ?? ''} '
+              '${names[t.accountId] ?? ''} ${t.amount.toStringAsFixed(2)}'
+          .toLowerCase();
+      return hay.contains(s);
+    }).toList();
+  }
+
+  static List<_Day> _groupByDay(List<Txn> rows) {
+    final byDay = <DateTime, List<Txn>>{};
+    for (final t in rows) {
+      final key = DateTime(t.date.year, t.date.month, t.date.day);
+      (byDay[key] ??= []).add(t);
+    }
+    final keys = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [for (final k in keys) _Day(k, byDay[k]!)];
+  }
+
+  Future<void> _exportCsv(
+      List<Txn> rows, Map<String, String> accountNames) async {
     final data = <List<String>>[
       ['Date', 'Type', 'Amount', 'Account', 'Category', 'Description'],
       ...rows.map((t) => [
@@ -43,259 +222,12 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     ];
     final csvText = Csv().encode(data);
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/transactions_${DateTime.now().millisecondsSinceEpoch}.csv');
+    final file = File(
+        '${dir.path}/transactions_${DateTime.now().millisecondsSinceEpoch}.csv');
     await file.writeAsString(csvText);
     await SharePlus.instance.share(
       ShareParams(files: [XFile(file.path)], text: 'Transactions export'),
     );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final txns = ref.watch(transactionsProvider);
-    final accounts = ref.watch(accountsProvider);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('History'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.tune),
-            onPressed: () => _showFilters(context),
-          ),
-          txns.maybeWhen(
-            data: (list) => accounts.maybeWhen(
-              data: (accs) {
-                final names = {for (final a in accs) a.id: a.name};
-                final filtered = _filter(list, names);
-                return IconButton(
-                  icon: const Icon(Icons.ios_share),
-                  tooltip: 'Export CSV',
-                  onPressed: filtered.isEmpty ? null : () => _exportCsv(filtered, names),
-                );
-              },
-              orElse: () => const SizedBox.shrink(),
-            ),
-            orElse: () => const SizedBox.shrink(),
-          ),
-        ],
-      ),
-      body: txns.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => accounts.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Error: $e')),
-          data: (accs) {
-            final names = {for (final a in accs) a.id: a.name};
-            final filtered = _filter(list, names);
-            final inc = filtered.where((t) => t.isIncome).fold<double>(0, (s, t) => s + t.amount);
-            final exp = filtered.where((t) => t.isSpending).fold<double>(0, (s, t) => s + t.amount);
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                  child: TextField(
-                    decoration: InputDecoration(
-                      hintText: 'Search description, category…',
-                      prefixIcon: const Icon(Icons.search, size: 20),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                      suffixIcon: _search.isEmpty
-                          ? null
-                          : IconButton(
-                              icon: const Icon(Icons.clear, size: 18),
-                              onPressed: () => setState(() => _search = ''),
-                            ),
-                    ),
-                    onChanged: (v) => setState(() => _search = v),
-                  ),
-                ),
-                if (_hasAnyFilter())
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: SizedBox(
-                      height: 36,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
-                        children: [
-                          if (_typeFilter != null)
-                            _chip(_typeFilter!.label, () => setState(() => _typeFilter = null)),
-                          if (_accountFilter != null)
-                            _chip(names[_accountFilter] ?? 'Account',
-                                () => setState(() => _accountFilter = null)),
-                          if (_categoryFilter != null)
-                            _chip(_categoryFilter!, () => setState(() => _categoryFilter = null)),
-                          if (_range != null)
-                            _chip(
-                                '${dateFmt.format(_range!.start)} → ${dateFmt.format(_range!.end)}',
-                                () => setState(() => _range = null)),
-                        ],
-                      ),
-                    ),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: Row(
-                    children: [
-                      _summary('In', inc, AppColors.income),
-                      const SizedBox(width: 10),
-                      _summary('Out', exp, AppColors.expense),
-                      const SizedBox(width: 10),
-                      _summary('Net', inc - exp,
-                          (inc - exp) >= 0 ? AppColors.income : AppColors.expense),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: filtered.isEmpty
-                      ? const EmptyState(
-                          icon: Icons.search_off,
-                          title: 'No transactions match',
-                          message: 'Try adjusting your filters or add a new transaction.',
-                        )
-                      : RefreshIndicator(
-                          onRefresh: () async {
-                            bumpTransactions(ref);
-                            await ref.read(transactionsProvider.future);
-                          },
-                          child: ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
-                            itemCount: filtered.length,
-                            itemBuilder: (_, i) {
-                              final t = filtered[i];
-                              final color = colorForTxn(t.type);
-                              return Dismissible(
-                                key: ValueKey(t.id),
-                                background: Container(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.expense,
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  alignment: Alignment.centerRight,
-                                  padding: const EdgeInsets.only(right: 20),
-                                  child: const Icon(Icons.delete, color: Colors.white),
-                                ),
-                                direction: DismissDirection.endToStart,
-                                confirmDismiss: (_) async {
-                                  return await showDialog<bool>(
-                                        context: context,
-                                        builder: (ctx) => AlertDialog(
-                                          title: const Text('Delete transaction?'),
-                                          actions: [
-                                            TextButton(
-                                                onPressed: () => Navigator.pop(ctx, false),
-                                                child: const Text('Cancel')),
-                                            FilledButton(
-                                                style: FilledButton.styleFrom(backgroundColor: AppColors.expense),
-                                                onPressed: () => Navigator.pop(ctx, true),
-                                                child: const Text('Delete')),
-                                          ],
-                                        ),
-                                      ) ??
-                                      false;
-                                },
-                                onDismissed: (_) async {
-                                  await _deleteTxn(t);
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 4),
-                                  child: Card(
-                                    child: ListTile(
-                                      onTap: () => _showDetails(t, names[t.accountId]),
-                                      leading: Container(
-                                        width: 42,
-                                        height: 42,
-                                        decoration: BoxDecoration(
-                                          color: color.withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Icon(iconForTxn(t),
-                                            color: color, size: 22),
-                                      ),
-                                      title: Text(
-                                          titleForTxn(t,
-                                              fromName: names[t.accountId],
-                                              toName: names[t.toAccountId]),
-                                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                                      subtitle: Text(
-                                        '${dateLongFmt.format(t.date)} • ${names[t.accountId] ?? ''}'
-                                        '${t.description?.isNotEmpty == true ? ' • ${t.description}' : ''}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                      trailing: Text(
-                                        '${signForTxn(t.type)}${formatMoney(t.amount)}',
-                                        style: TextStyle(
-                                          color: color,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _summary(String label, double value, Color color) => Expanded(
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 2),
-              Text(formatMoney(value),
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
-            ],
-          ),
-        ),
-      );
-
-  Widget _chip(String label, VoidCallback onClear) => Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: InputChip(
-          label: Text(label, style: const TextStyle(fontSize: 12)),
-          onDeleted: onClear,
-          deleteIconColor: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      );
-
-  bool _hasAnyFilter() =>
-      _typeFilter != null || _categoryFilter != null || _accountFilter != null || _range != null;
-
-  List<Txn> _filter(List<Txn> list, Map<String, String> names) {
-    final s = _search.trim().toLowerCase();
-    return list.where((t) {
-      if (_typeFilter != null && t.type != _typeFilter) return false;
-      if (_categoryFilter != null && t.category != _categoryFilter) return false;
-      if (_accountFilter != null && t.accountId != _accountFilter) return false;
-      if (_range != null) {
-        if (t.date.isBefore(_range!.start)) return false;
-        if (t.date.isAfter(_range!.end.add(const Duration(days: 1)))) return false;
-      }
-      if (s.isNotEmpty) {
-        final hay =
-            '${t.category} ${t.description ?? ''} ${names[t.accountId] ?? ''}'.toLowerCase();
-        if (!hay.contains(s)) return false;
-      }
-      return true;
-    }).toList();
   }
 
   Future<void> _deleteTxn(Txn t) async {
@@ -306,292 +238,412 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     bumpAccounts(ref);
   }
 
-  Future<void> _showDetails(Txn t, String? accountName) async {
-    final color = colorForTxn(t.type);
+  Future<void> _showDetails(Txn t) async {
+    final names = {
+      for (final a in ref.read(accountsProvider).value ?? [])
+        a.id as String: a.name as String,
+    };
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useRootNavigator: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _TxnDetailSheet(
+        txn: t,
+        accountName: names[t.accountId],
+        toAccountName: names[t.toAccountId],
+        onDelete: () async {
+          final ok = await showDeleteConfirmation(
+            context: ctx,
+            title: 'Delete this transaction?',
+            message: '${titleForTxn(t, fromName: names[t.accountId], toName: names[t.toAccountId])} · '
+                '${formatMoney(t.amount)} will be removed and your balances '
+                'will settle back.',
+          );
+          if (ok != true) return;
+          await _deleteTxn(t);
+          if (ctx.mounted) Navigator.pop(ctx);
+        },
       ),
-      builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 16,
-            bottom: 24 + MediaQuery.of(ctx).viewInsets.bottom,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(ctx).dividerColor,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(iconForCategory(t.category), color: color, size: 26),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(t.category,
-                            style: const TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 2),
-                        Text(t.type.label,
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: color,
-                                fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    '${signForTxn(t.type)}${formatMoney(t.amount)}',
-                    style: TextStyle(
-                        color: color,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              const Divider(height: 1),
-              _DetailRow(icon: Icons.calendar_today, label: 'Date', value: dateLongFmt.format(t.date)),
-              _DetailRow(
-                  icon: Icons.account_balance_wallet,
-                  label: 'Account',
-                  value: accountName ?? '—'),
-              _DetailRow(icon: Icons.category_outlined, label: 'Category', value: t.category),
-              if (t.description?.isNotEmpty == true)
-                _DetailRow(icon: Icons.notes, label: 'Note', value: t.description!),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.close),
-                      label: const Text('Close'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(backgroundColor: AppColors.expense),
-                      onPressed: () async {
-                        final ok = await showDialog<bool>(
-                          context: ctx,
-                          builder: (dctx) => AlertDialog(
-                            title: const Text('Delete transaction?'),
-                            actions: [
-                              TextButton(
-                                  onPressed: () => Navigator.pop(dctx, false),
-                                  child: const Text('Cancel')),
-                              FilledButton(
-                                style: FilledButton.styleFrom(
-                                    backgroundColor: AppColors.expense),
-                                onPressed: () => Navigator.pop(dctx, true),
-                                child: const Text('Delete'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (ok != true) return;
-                        await _deleteTxn(t);
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      },
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('Delete'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
+}
 
-  void _showFilters(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      useRootNavigator: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+class _Day {
+  final DateTime date;
+  final List<Txn> rows;
+  const _Day(this.date, this.rows);
+
+  /// Money in minus money out. Transfers move between your own pockets, so
+  /// they contribute nothing.
+  double get net => rows.fold<double>(
+      0,
+      (sum, t) => sum +
+          (t.isIncome
+              ? t.amount
+              : t.isSpending
+                  ? -t.amount
+                  : 0));
+}
+
+class _DayGroup extends StatelessWidget {
+  final _Day day;
+  final Map<String, String> names;
+  final ValueChanged<Txn> onTap;
+
+  const _DayGroup(
+      {required this.day, required this.names, required this.onTap});
+
+  static String _label(DateTime d) {
+    final today = DateTime.now();
+    final t0 = DateTime(today.year, today.month, today.day);
+    final diff = t0.difference(d).inDays;
+    final stamp = dayMonthFmt.format(d);
+    if (diff == 0) return 'Today · $stamp';
+    if (diff == 1) return 'Yesterday · $stamp';
+    return stamp;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    final net = day.net;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DayHeader(
+          label: _label(day.date),
+          amount: formatMoney(net),
+          // Only a losing day earns red. A day of transfers, or a day that
+          // came out ahead, has nothing to warn about.
+          amountColor: net < 0
+              ? t.expense.ink
+              : net > 0
+                  ? t.income.ink
+                  : t.inkMuted,
+        ),
+        RowGroup(
+          children: [
+            for (final txn in day.rows)
+              _HistoryRow(txn: txn, names: names, onTap: () => onTap(txn)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _HistoryRow extends StatelessWidget {
+  final Txn txn;
+  final Map<String, String> names;
+  final VoidCallback onTap;
+
+  const _HistoryRow(
+      {required this.txn, required this.names, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    final transfer = txn.type == TxnType.transfer;
+    final accountName = names[txn.accountId];
+
+    return TxnRow(
+      onTap: onTap,
+      leading: CategoryGlyph(
+        name: txn.category,
+        hue: txn.category.hashCode,
+        neutral: transfer,
       ),
-      builder: (ctx) {
-        final accs = ref.read(accountsProvider).value ?? [];
-        final txnsList = ref.read(transactionsProvider).value ?? [];
-        final categories = txnsList.map((t) => t.category).toSet().toList()..sort();
-        return StatefulBuilder(
-          builder: (ctx, setSheet) => Padding(
-            padding: EdgeInsets.only(
-              left: 18,
-              right: 18,
-              top: 18,
-              bottom: 18 + MediaQuery.of(ctx).viewInsets.bottom,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Theme.of(ctx).dividerColor,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text('Filters', style: Theme.of(ctx).textTheme.titleLarge),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<TxnType?>(
-                  initialValue: _typeFilter,
-                  decoration: const InputDecoration(labelText: 'Type'),
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('All')),
-                    DropdownMenuItem(value: TxnType.income, child: Text('Income')),
-                    DropdownMenuItem(value: TxnType.expense, child: Text('Expense')),
-                  ],
-                  onChanged: (v) => setSheet(() => _typeFilter = v),
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<String?>(
-                  initialValue: _accountFilter,
-                  decoration: const InputDecoration(labelText: 'Account'),
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('All')),
-                    ...accs.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))),
-                  ],
-                  onChanged: (v) => setSheet(() => _accountFilter = v),
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<String?>(
-                  initialValue: _categoryFilter,
-                  decoration: const InputDecoration(labelText: 'Category'),
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('All')),
-                    ...categories.map((c) => DropdownMenuItem(value: c, child: Text(c))),
-                  ],
-                  onChanged: (v) => setSheet(() => _categoryFilter = v),
-                ),
-                const SizedBox(height: 10),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.date_range),
-                  title: Text(_range == null
-                      ? 'Date range: All'
-                      : '${dateFmt.format(_range!.start)} → ${dateFmt.format(_range!.end)}'),
-                  trailing: Wrap(
-                    children: [
-                      if (_range != null)
-                        IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () => setSheet(() => _range = null)),
-                      IconButton(
-                        icon: const Icon(Icons.edit_calendar),
-                        onPressed: () async {
-                          final picked = await showDateRangePicker(
-                            context: ctx,
-                            firstDate: DateTime(2000),
-                            lastDate: DateTime.now().add(const Duration(days: 365)),
-                          );
-                          if (picked != null) setSheet(() => _range = picked);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () {
-                          setSheet(() {
-                            _typeFilter = null;
-                            _categoryFilter = null;
-                            _accountFilter = null;
-                            _range = null;
-                          });
-                        },
-                        child: const Text('Clear'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: () {
-                          setState(() {});
-                          Navigator.pop(ctx);
-                        },
-                        child: const Text('Apply'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
+      title: txn.description?.isNotEmpty == true
+          ? txn.description!
+          : titleForTxn(txn,
+              fromName: accountName, toName: names[txn.toAccountId]),
+      subtitle: [
+        if (transfer)
+          'Transfer'
+        else ...[
+          ?accountName,
+          txn.category,
+        ],
+        timeFmt.format(txn.date),
+      ].join(' · '),
+      amount: '${signForTxn(txn.type)}${formatMoney(txn.amount)}',
+      amountColor: switch (txn.type) {
+        TxnType.income => t.income.ink,
+        TxnType.expense => t.expense.ink,
+        TxnType.transfer => t.inkMuted,
       },
     );
   }
 }
 
-class _DetailRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  const _DetailRow({required this.icon, required this.label, required this.value});
+/// The chips that show what is currently filtering the list, each one its own
+/// off switch.
+class _ActiveFilters extends StatelessWidget {
+  final HistoryFilters filters;
+  final Map<String, String> accountNames;
+  final ValueChanged<HistoryFilters> onChanged;
+
+  const _ActiveFilters({
+    required this.filters,
+    required this.accountNames,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 32,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          if (filters.type != null) ...[
+            SelectChip(
+              label: filters.type!.label,
+              selected: true,
+              compact: true,
+              onTap: () => onChanged(filters.copyWith(clearType: true)),
+            ),
+            const SizedBox(width: 7),
+          ],
+          if (filters.accountId != null) ...[
+            SelectChip(
+              label: accountNames[filters.accountId] ?? 'Account',
+              selected: true,
+              compact: true,
+              onTap: () => onChanged(filters.copyWith(clearAccount: true)),
+            ),
+            const SizedBox(width: 7),
+          ],
+          if (filters.category != null) ...[
+            SelectChip(
+              label: filters.category!,
+              selected: true,
+              compact: true,
+              onTap: () => onChanged(filters.copyWith(clearCategory: true)),
+            ),
+            const SizedBox(width: 7),
+          ],
+          SelectChip(
+            label: 'Clear',
+            selected: false,
+            compact: true,
+            onTap: () => onChanged(const HistoryFilters()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyHistory extends StatelessWidget {
+  final VoidCallback onAdd;
+  const _EmptyHistory({required this.onAdd});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 112),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: EmptyCard(
+            title: 'No transactions yet',
+            message: 'Log one payment and the dashboard can start telling you '
+                'what is safe to spend.',
+            actionLabel: 'Add transaction',
+            onAction: onAdd,
+          ),
+        ),
+      );
+}
+
+/// The search came back with nothing — and the reason is usually the filters,
+/// so the screen says so and offers the one tap that fixes it.
+class _NoResults extends StatelessWidget {
+  final String query;
+  final int filterCount;
+  final int total;
+  final VoidCallback onClear;
+
+  const _NoResults({
+    required this.query,
+    required this.filterCount,
+    required this.total,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    final trimmed = query.trim();
+
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 112),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: DottedBorderBox(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                trimmed.isEmpty
+                    ? 'Nothing matches those filters'
+                    : 'Nothing matches “$trimmed”',
+                textAlign: TextAlign.center,
+                style: AppType.rowTitle.copyWith(fontSize: 16, color: t.ink),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                filterCount == 0
+                    ? 'Try a shorter search, or a different word.'
+                    : '$filterCount filter${filterCount == 1 ? ' is' : 's are'} '
+                        'still on. Clearing ${filterCount == 1 ? 'it' : 'them'} '
+                        'searches all $total rows.',
+                textAlign: TextAlign.center,
+                style: AppType.body.copyWith(height: 1.55, color: t.inkMuted),
+              ),
+              const SizedBox(height: 16),
+              SecondaryButton(
+                label: filterCount == 0 ? 'Clear search' : 'Clear filters',
+                filled: Theme.of(context).brightness == Brightness.light,
+                onPressed: onClear,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One transaction, in full, with the one destructive action it allows.
+class _TxnDetailSheet extends StatelessWidget {
+  final Txn txn;
+  final String? accountName;
+  final String? toAccountName;
+  final Future<void> Function() onDelete;
+
+  const _TxnDetailSheet({
+    required this.txn,
+    required this.accountName,
+    required this.toAccountName,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    final tint = switch (txn.type) {
+      TxnType.income => t.income,
+      TxnType.expense => t.expense,
+      TxnType.transfer => t.neutral,
+    };
+
+    return SheetSurface(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                CategoryGlyph(
+                  name: txn.category,
+                  hue: txn.category.hashCode,
+                  size: 44,
+                  neutral: txn.type == TxnType.transfer,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        titleForTxn(txn,
+                            fromName: accountName, toName: toAccountName),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.rowTitle
+                            .copyWith(fontSize: 17, color: t.ink),
+                      ),
+                      const SizedBox(height: 4),
+                      Eyebrow(txn.type.label, color: t.inkMuted),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            TintCard(
+              tint: tint,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(kCurrencyCode,
+                      style:
+                          AppType.currencyCode.copyWith(color: tint.muted)),
+                  const SizedBox(height: 4),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      moneyDigits(txn.isSpending ? -txn.amount : txn.amount),
+                      maxLines: 1,
+                      softWrap: false,
+                      style: AppType.heroFigure
+                          .copyWith(fontSize: 34, color: tint.ink),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            _DetailRow(label: 'Date', value: dateLongFmt.format(txn.date)),
+            _DetailRow(label: 'Time', value: timeFmt.format(txn.date)),
+            _DetailRow(label: 'Account', value: accountName ?? '—'),
+            if (toAccountName != null)
+              _DetailRow(label: 'To', value: toAccountName!),
+            _DetailRow(label: 'Category', value: txn.category),
+            if (txn.description?.isNotEmpty == true)
+              _DetailRow(label: 'Note', value: txn.description!),
+            const SizedBox(height: 20),
+            DangerButton(label: 'Delete transaction', onPressed: onDelete),
+            const SizedBox(height: 10),
+            SecondaryButton(
+              label: 'Close',
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _DetailRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: cs.onSurfaceVariant),
-          const SizedBox(width: 12),
           SizedBox(
             width: 84,
             child: Text(label,
-                style: TextStyle(
-                    fontSize: 12.5,
-                    color: cs.onSurfaceVariant,
-                    fontWeight: FontWeight.w600)),
+                style: AppType.label.copyWith(color: t.inkMuted)),
           ),
           Expanded(
             child: Text(value,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                style: AppType.rowTitle.copyWith(height: 1.3, color: t.ink)),
           ),
         ],
       ),

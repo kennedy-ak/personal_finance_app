@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/components.dart';
 import '../../../core/formatters.dart';
 import '../../../core/theme.dart';
 import '../../accounts/data/account_repository.dart';
@@ -14,6 +15,10 @@ import '../domain/coach_action.dart';
 ///
 /// The card is the whole point of the rewrite: the old coach could only ever
 /// describe an action in a paragraph and leave the user to go and perform it.
+///
+/// It must never read as something that already happened. Hence the eyebrow —
+/// PROPOSED · NOT YET DONE — and the pairing of Approve with an equally
+/// available Dismiss.
 class CoachActionCard extends ConsumerStatefulWidget {
   final CoachAction action;
 
@@ -26,6 +31,7 @@ class CoachActionCard extends ConsumerStatefulWidget {
 class _CoachActionCardState extends ConsumerState<CoachActionCard> {
   bool _applying = false;
   bool _applied = false;
+  bool _dismissed = false;
   String? _error;
 
   Future<void> _apply() async {
@@ -57,102 +63,129 @@ class _CoachActionCardState extends ConsumerState<CoachActionCard> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final t = CediTokens.of(context);
     final action = widget.action;
-    final (icon, title, detail) = _describe(action);
-    final color = _applied ? AppColors.income : AppColors.accent;
+    final (title, detail) = _describe(action);
 
-    return Card(
-      color: color.withValues(alpha: 0.07),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    if (_dismissed) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Text('Suggestion dismissed.',
+            style: AppType.bodySmall.copyWith(color: t.inkFaint)),
+      );
+    }
+
+    final tint = _applied ? t.income : t.accent;
+
+    return TintCard(
+      tint: tint,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 5,
+                height: 5,
+                decoration:
+                    BoxDecoration(color: tint.ink, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 7),
+              Eyebrow(_applied ? 'Done' : 'Proposed · not yet done',
+                  color: tint.ink),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(title,
+              style: AppType.label
+                  .copyWith(fontSize: 15, height: 1.35, color: tint.body)),
+          const SizedBox(height: 6),
+          Text(detail,
+              style: AppType.bodySmall
+                  .copyWith(height: 1.5, color: tint.muted)),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              'That did not go through, and nothing was changed. Try again.',
+              style: AppType.bodySmall.copyWith(color: t.expense.ink),
+            ),
+          ],
+          if (!_applied) ...[
+            const SizedBox(height: 13),
             Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(_applied ? Icons.check_circle : icon, size: 20, color: color),
-                const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                      height: 1.3,
+                  child: Material(
+                    color: t.protected,
+                    borderRadius: Radii.sm,
+                    child: InkWell(
+                      borderRadius: Radii.sm,
+                      onTap: _applying ? null : _apply,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: _applying
+                            ? Center(
+                                child: SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: t.accent.surface),
+                                ),
+                              )
+                            : Text(
+                                _approveLabel(action),
+                                textAlign: TextAlign.center,
+                                style: AppType.button.copyWith(
+                                  fontSize: 14,
+                                  // Violet is a mid-tone, so its label is the
+                                  // dark end of the same hue rather than white.
+                                  color: Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? const Color(0xFF140F22)
+                                      : const Color(0xFFF6F3FE),
+                                ),
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Material(
+                  color: Colors.transparent,
+                  borderRadius: Radii.sm,
+                  child: InkWell(
+                    borderRadius: Radii.sm,
+                    onTap:
+                        _applying ? null : () => setState(() => _dismissed = true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        borderRadius: Radii.sm,
+                        border: Border.all(color: t.outline),
+                      ),
+                      child: Text('Dismiss',
+                          style: AppType.label
+                              .copyWith(fontSize: 14, color: t.inkBody)),
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              detail,
-              style: TextStyle(
-                fontSize: 12.5,
-                height: 1.45,
-                color: cs.onSurfaceVariant,
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: const TextStyle(fontSize: 12, color: AppColors.expense),
-              ),
-            ],
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerRight,
-              child: _applied
-                  ? const Padding(
-                      padding: EdgeInsets.only(right: 8, top: 4, bottom: 4),
-                      child: Text(
-                        'Done',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.income,
-                        ),
-                      ),
-                    )
-                  : FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: color,
-                        minimumSize: const Size(110, 38),
-                      ),
-                      onPressed: _applying ? null : _apply,
-                      child: _applying
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : Text(_actionLabel(action)),
-                    ),
-            ),
           ],
-        ),
+        ],
       ),
     );
   }
 
-  (IconData, String, String) _describe(CoachAction action) => switch (action) {
+  (String, String) _describe(CoachAction action) => switch (action) {
         final TransferAction a => (
-            Icons.swap_horiz,
-            'Move ${formatMoney(a.amount)} from ${a.fromAccountName} to ${a.toAccountName}',
+            'Move ${formatMoney(a.amount)} from ${a.fromAccountName} '
+                'to ${a.toAccountName}',
             a.reason,
           ),
         final CommitmentAction a => (
-            a.direction == ObligationDirection.out
-                ? Icons.receipt_long
-                : Icons.payments,
             '${a.direction == ObligationDirection.out ? 'Record bill' : 'Record income'}: '
                 '${a.name} — ${formatMoney(a.amount)}',
             '${a.cadence.label}, next ${dateLongFmt.format(a.nextDue)}'
@@ -160,8 +193,8 @@ class _CoachActionCardState extends ConsumerState<CoachActionCard> {
           ),
       };
 
-  String _actionLabel(CoachAction action) => switch (action) {
-        TransferAction() => 'Move it',
+  String _approveLabel(CoachAction action) => switch (action) {
+        TransferAction() => 'Approve transfer',
         CommitmentAction() => 'Save it',
       };
 }

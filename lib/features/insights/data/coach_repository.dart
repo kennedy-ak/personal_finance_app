@@ -48,7 +48,7 @@ class CoachRepository {
         .from('ai_messages')
         .select()
         .eq('thread_id', threadId)
-        .order('created_at');
+        .order('created_at', ascending: true);
     return (rows as List)
         .map((r) => CoachMessage.fromJson(r as Map<String, dynamic>))
         .toList();

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../core/design/components.dart';
 import '../../../core/finance/money_engine.dart';
 import '../../../core/finance/snapshot_provider.dart';
 import '../../../core/formatters.dart';
@@ -13,8 +15,10 @@ import '../domain/obligation.dart';
 import 'goal_editor_sheet.dart';
 import 'obligation_editor_sheet.dart';
 
-/// Where the user tells the app what it cannot work out on its own: what is
-/// already owed, what is coming in, and what must not be touched.
+/// What is already owed, and what is being saved for.
+///
+/// Until the app knows these, a balance is just a number: the dashboard cannot
+/// tell spendable money from money that is already spoken for.
 class PlanScreen extends ConsumerStatefulWidget {
   const PlanScreen({super.key});
 
@@ -22,43 +26,66 @@ class PlanScreen extends ConsumerStatefulWidget {
   ConsumerState<PlanScreen> createState() => _PlanScreenState();
 }
 
-class _PlanScreenState extends ConsumerState<PlanScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
-
-  @override
-  void dispose() {
-    _tabs.dispose();
-    super.dispose();
-  }
+class _PlanScreenState extends ConsumerState<PlanScreen> {
+  int _tab = 0;
 
   @override
   Widget build(BuildContext context) {
+    final t = CediTokens.of(context);
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Commitments'),
-        bottom: TabBar(
-          controller: _tabs,
-          tabs: const [
-            Tab(text: 'Bills & income'),
-            Tab(text: 'Goals'),
+      backgroundColor: t.canvas,
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                        alignment: Alignment.centerLeft,
+                        constraints:
+                            const BoxConstraints(minWidth: 28, minHeight: 28),
+                        onPressed: () =>
+                            context.canPop() ? context.pop() : context.go('/'),
+                        icon: Icon(Icons.arrow_back,
+                            size: 22, color: t.inkMuted),
+                      ),
+                      const Spacer(),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _tab == 0
+                            ? ObligationEditorSheet.show(context)
+                            : GoalEditorSheet.show(context),
+                        child: Text('Add',
+                            style: AppType.label
+                                .copyWith(fontSize: 13, color: t.brandInk)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Commitments',
+                      style: AppType.title.copyWith(color: t.ink)),
+                  const SizedBox(height: 16),
+                  SegmentedTabs(
+                    labels: const ['Bills & income', 'Goals'],
+                    index: _tab,
+                    onChanged: (i) => setState(() => _tab = i),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: _tab == 0 ? const _ObligationsTab() : const _GoalsTab(),
+            ),
           ],
         ),
-      ),
-      floatingActionButton: AnimatedBuilder(
-        animation: _tabs,
-        builder: (context, _) => FloatingActionButton.extended(
-          heroTag: 'plan-fab',
-          onPressed: () => _tabs.index == 0
-              ? ObligationEditorSheet.show(context)
-              : GoalEditorSheet.show(context),
-          icon: const Icon(Icons.add),
-          label: Text(_tabs.index == 0 ? 'Commitment' : 'Goal'),
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabs,
-        children: const [_ObligationsTab(), _GoalsTab()],
       ),
     );
   }
@@ -67,73 +94,73 @@ class _PlanScreenState extends ConsumerState<PlanScreen>
 class _ObligationsTab extends ConsumerWidget {
   const _ObligationsTab();
 
-  Future<void> _delete(BuildContext context, WidgetRef ref, Obligation o) async {
-    final ok = await _confirm(context, 'Delete "${o.name}"?');
-    if (ok != true) return;
-    await ref.read(obligationRepositoryProvider).delete(o.id);
-    bumpObligations(ref);
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = CediTokens.of(context);
     final async = ref.watch(obligationsProvider);
     final snapshot = ref.watch(moneySnapshotProvider).value;
-    final accountNames = {
-      for (final a in ref.watch(accountsProvider).value ?? []) a.id: a.name
-    };
+    final accounts = ref.watch(accountsProvider).value ?? [];
+    final accountNames = {for (final a in accounts) a.id: a.name};
 
     return async.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
+      loading: () => Center(child: CircularProgressIndicator(color: t.brandInk)),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: ErrorCard(
+          title: 'Could not load your commitments',
+          message: 'Check your connection and try again.',
+          onRetry: () => bumpObligations(ref),
+        ),
+      ),
       data: (list) {
-        if (list.isEmpty) {
-          return _Empty(
-            icon: Icons.event_repeat_outlined,
-            title: 'Nothing committed yet',
-            message:
-                'Add your rent, subscriptions and salary. Until the app knows '
-                'what is already owed, a balance is just a number.',
-            onAdd: () => ObligationEditorSheet.show(context),
-            addLabel: 'Add a commitment',
+        final active = list.where((o) => o.isActive).toList();
+        if (active.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: EmptyCard(
+                title: 'Nothing committed yet',
+                message: 'Add your rent, subscriptions and salary. Until the '
+                    'app knows what is already owed, a balance is just a '
+                    'number.',
+                actionLabel: 'Add a commitment',
+                onAction: () => ObligationEditorSheet.show(context),
+              ),
+            ),
           );
         }
 
-        final bills = list.where((o) => o.isOutflow && o.isActive).toList();
-        final incomes = list.where((o) => !o.isOutflow && o.isActive).toList();
+        final bills = active.where((o) => o.isOutflow).toList()
+          ..sort((a, b) => a.nextDue.compareTo(b.nextDue));
+        final incomes = active.where((o) => !o.isOutflow).toList()
+          ..sort((a, b) => a.nextDue.compareTo(b.nextDue));
 
         return RefreshIndicator(
+          color: t.brandInk,
+          backgroundColor: t.card,
           onRefresh: () async {
             bumpObligations(ref);
             await ref.read(obligationsProvider.future);
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 96),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 112),
             children: [
-              if (snapshot != null) _CommittedSummary(snapshot: snapshot),
-              if (bills.isNotEmpty) ...[
-                const SizedBox(height: 18),
-                const _GroupHeader('Bills'),
-                for (final o in bills)
-                  _ObligationTile(
+              if (snapshot != null) ...[
+                _CommittedSummary(snapshot: snapshot),
+                const SizedBox(height: 16),
+              ],
+              for (final o in [...bills, ...incomes])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _ObligationCard(
                     obligation: o,
                     accountName: accountNames[o.accountId],
-                    onEdit: () =>
+                    snapshot: snapshot,
+                    onTap: () =>
                         ObligationEditorSheet.show(context, obligation: o),
-                    onDelete: () => _delete(context, ref, o),
                   ),
-              ],
-              if (incomes.isNotEmpty) ...[
-                const SizedBox(height: 18),
-                const _GroupHeader('Expected income'),
-                for (final o in incomes)
-                  _ObligationTile(
-                    obligation: o,
-                    accountName: accountNames[o.accountId],
-                    onEdit: () =>
-                        ObligationEditorSheet.show(context, obligation: o),
-                    onDelete: () => _delete(context, ref, o),
-                  ),
-              ],
+                ),
             ],
           ),
         );
@@ -149,34 +176,48 @@ class _CommittedSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final days = snapshot.horizon.difference(snapshot.asOf).inDays;
+    final t = CediTokens.of(context);
+    final covered = snapshot.usableCash >= snapshot.committed;
 
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        color: cs.surfaceContainerHighest,
-      ),
+    return CediCard(
+      padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Committed in the next $days days',
-            style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            formatMoney(snapshot.committed),
-            style: const TextStyle(
-                fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.8),
-          ),
+          Eyebrow('Leaving before ${dayMonthFmt.format(snapshot.horizon)}',
+              size: 11, color: t.inkFaint),
           const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(kCurrencyCode,
+                  style: AppType.label.copyWith(color: t.inkMuted)),
+              const SizedBox(width: 7),
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    moneyDigits(snapshot.committed),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: AppType.heroFigure
+                        .copyWith(fontSize: 30, letterSpacing: -0.9, color: t.ink),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
           Text(
-            snapshot.daysUntilIncome == null
-                ? 'Add your salary so the app knows when money next arrives.'
-                : 'Next income in ${snapshot.daysUntilIncome} days.',
-            style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
+            covered
+                ? 'Your accounts cover all of it. '
+                    '${formatMoney(snapshot.safeToSpend)} is left over.'
+                : 'That is more than the ${formatMoney(snapshot.usableCash)} '
+                    'you can currently reach.',
+            style: AppType.bodySmall.copyWith(
+                height: 1.5, color: covered ? t.inkMuted : t.expense.ink),
           ),
         ],
       ),
@@ -184,80 +225,114 @@ class _CommittedSummary extends StatelessWidget {
   }
 }
 
-class _ObligationTile extends StatelessWidget {
+/// One bill or one expected income.
+///
+/// A bill that cannot be paid is the single most useful thing this screen can
+/// tell you, so it is the only one that gets a tinted card.
+class _ObligationCard extends StatelessWidget {
   final Obligation obligation;
   final String? accountName;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final MoneySnapshot? snapshot;
+  final VoidCallback onTap;
 
-  const _ObligationTile({
+  const _ObligationCard({
     required this.obligation,
     required this.accountName,
-    required this.onEdit,
-    required this.onDelete,
+    required this.snapshot,
+    required this.onTap,
   });
+
+  /// Whether the account this bill is pinned to can actually cover it. A bill
+  /// with no pinned account falls back to whether anything can.
+  bool get _covered {
+    final s = snapshot;
+    if (s == null || !obligation.isOutflow) return true;
+    final pinned = obligation.accountId;
+    if (pinned == null) return s.usableCash >= obligation.amount;
+    final standing =
+        s.standings.where((x) => x.account.id == pinned).firstOrNull;
+    if (standing == null) return s.usableCash >= obligation.amount;
+    return standing.available >= obligation.amount;
+  }
+
+  double get _shortBy {
+    final s = snapshot;
+    if (s == null) return 0;
+    final pinned = obligation.accountId;
+    final standing = pinned == null
+        ? null
+        : s.standings.where((x) => x.account.id == pinned).firstOrNull;
+    final reachable = standing?.available ?? s.usableCash;
+    final gap = obligation.amount - reachable;
+    return gap > 0 ? gap : 0;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final o = obligation;
-    final color = o.isOutflow ? AppColors.expense : AppColors.income;
-    final next = o.nextOccurrenceOnOrAfter(DateTime.now());
-    final daysAway = next?.difference(DateTime.now()).inDays;
+    final t = CediTokens.of(context);
+    final income = !obligation.isOutflow;
+    final uncovered = obligation.isOutflow && !_covered;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        contentPadding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
-        onTap: onEdit,
-        leading: Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
+    final tint = income
+        ? t.income
+        : uncovered
+            ? t.expense
+            : t.neutral;
+
+    final eyebrow = income
+        ? 'Income · ${dayMonthFmt.format(obligation.nextDue)}'
+        : '${uncovered ? 'Not covered' : 'Covered'} · '
+            'due ${dayMonthFmt.format(obligation.nextDue)}';
+
+    final detail = income
+        ? '${accountName == null ? 'No account set' : 'Into $accountName'}, '
+            '${obligation.cadence.label.toLowerCase()}'
+        : uncovered
+            ? '${accountName ?? 'No account'} is short '
+                '${formatMoney(_shortBy)} for this.'
+            : '${accountName == null ? 'No account set' : 'From $accountName'}, '
+                '${obligation.cadence.label.toLowerCase()}';
+
+    return TintCard(
+      tint: tint,
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(obligation.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.rowTitle
+                            .copyWith(fontSize: 15, color: tint.body)),
+                    const SizedBox(height: 7),
+                    Eyebrow(eyebrow,
+                        size: 10,
+                        color: income || uncovered ? tint.muted : t.inkMuted),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(formatMoney(obligation.amount),
+                  softWrap: false,
+                  style: AppType.figureRow.copyWith(
+                      fontSize: 16,
+                      color: income || uncovered ? tint.ink : t.ink)),
+            ],
           ),
-          child: Icon(o.isOutflow ? Icons.receipt_long : Icons.payments,
-              color: color, size: 20),
-        ),
-        title: Text(o.name,
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14.5)),
-        subtitle: Text(
-          [
-            o.cadence.label,
-            if (next != null)
-              daysAway != null && daysAway <= 0
-                  ? 'due today'
-                  : 'in ${daysAway ?? 0} days',
-            ?accountName,
-          ].join(' • '),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '${o.isOutflow ? '-' : '+'}${formatMoney(o.amount)}',
-              style: TextStyle(
-                  color: color, fontWeight: FontWeight.w700, fontSize: 14),
-            ),
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, size: 20),
-              onSelected: (v) {
-                if (v == 'edit') onEdit();
-                if (v == 'delete') onDelete();
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'edit', child: Text('Edit')),
-                PopupMenuItem(
-                    value: 'delete',
-                    child:
-                        Text('Delete', style: TextStyle(color: AppColors.expense))),
-              ],
-            ),
-          ],
-        ),
+          const SizedBox(height: 9),
+          Text(detail,
+              style: AppType.rowSub.copyWith(
+                  height: 1.45,
+                  color: income || uncovered ? tint.muted : t.inkMuted)),
+        ],
       ),
     );
   }
@@ -266,72 +341,57 @@ class _ObligationTile extends StatelessWidget {
 class _GoalsTab extends ConsumerWidget {
   const _GoalsTab();
 
-  Future<void> _delete(BuildContext context, WidgetRef ref, Goal g) async {
-    final ok = await _confirm(context, 'Delete "${g.name}"?');
-    if (ok != true) return;
-    await ref.read(goalRepositoryProvider).delete(g.id);
-    bumpGoals(ref);
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = CediTokens.of(context);
     final async = ref.watch(goalsProvider);
 
     return async.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
+      loading: () => Center(child: CircularProgressIndicator(color: t.brandInk)),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: ErrorCard(
+          title: 'Could not load your goals',
+          message: 'Check your connection and try again.',
+          onRetry: () => bumpGoals(ref),
+        ),
+      ),
       data: (list) {
-        if (list.isEmpty) {
-          return _Empty(
-            icon: Icons.flag_outlined,
-            title: 'No goals yet',
-            message:
-                'An emergency fund in a current account looks exactly like '
-                'grocery money. Name it here and the app will stop offering it.',
-            onAdd: () => GoalEditorSheet.show(context),
-            addLabel: 'Add a goal',
+        final active = list.where((g) => g.isActive).toList();
+        if (active.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: EmptyCard(
+                title: 'No goals yet',
+                message: 'Money you name is money you keep. A goal is held out '
+                    'of safe-to-spend, so it stops being spent by accident.',
+                actionLabel: 'Add a goal',
+                onAction: () => GoalEditorSheet.show(context),
+              ),
+            ),
           );
         }
 
-        final active = list.where((g) => g.isActive).toList();
-        final reserved = active.fold<double>(0, (s, g) => s + g.savedAmount);
-
         return RefreshIndicator(
+          color: t.brandInk,
+          backgroundColor: t.card,
           onRefresh: () async {
             bumpGoals(ref);
             await ref.read(goalsProvider.future);
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 96),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 112),
             children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Held back from spending',
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                    const SizedBox(height: 6),
-                    Text(formatMoney(reserved),
-                        style: const TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.8)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
-              for (final g in active)
-                _GoalTile(
-                  goal: g,
-                  onEdit: () => GoalEditorSheet.show(context, goal: g),
-                  onDelete: () => _delete(context, ref, g),
+              for (var i = 0; i < active.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _GoalCard(
+                    goal: active[i],
+                    index: i,
+                    onTap: () => GoalEditorSheet.show(context, goal: active[i]),
+                  ),
                 ),
             ],
           ),
@@ -341,157 +401,91 @@ class _GoalsTab extends ConsumerWidget {
   }
 }
 
-class _GoalTile extends StatelessWidget {
+class _GoalCard extends StatelessWidget {
   final Goal goal;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final int index;
+  final VoidCallback onTap;
 
-  const _GoalTile({
-    required this.goal,
-    required this.onEdit,
-    required this.onDelete,
-  });
+  const _GoalCard(
+      {required this.goal, required this.index, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final t = CediTokens.of(context);
     final monthly = goal.requiredMonthlyContribution;
+    final colour = goal.isComplete
+        ? t.income.ink
+        : index.isEven
+            ? t.brand
+            : t.protected;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
-        onTap: onEdit,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 8, 16),
-          child: Column(
+    return CediCard(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(goal.name,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 15)),
-                  ),
-                  Text(
-                    '${formatMoney(goal.savedAmount)} / ${formatMoney(goal.targetAmount)}',
-                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-                  ),
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert, size: 20),
-                    onSelected: (v) {
-                      if (v == 'edit') onEdit();
-                      if (v == 'delete') onDelete();
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'edit', child: Text('Edit')),
-                      PopupMenuItem(
-                          value: 'delete',
-                          child: Text('Delete',
-                              style: TextStyle(color: AppColors.expense))),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: goal.progress,
-                  minHeight: 8,
-                  backgroundColor: cs.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation(
-                      goal.isComplete ? AppColors.income : AppColors.seed),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(goal.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.rowTitle
+                            .copyWith(fontSize: 15, color: t.ink)),
+                    const SizedBox(height: 7),
+                    Eyebrow(
+                      goal.targetDate == null
+                          ? 'No target date'
+                          : 'Target ${dayMonthFmt.format(goal.targetDate!)}',
+                      size: 10,
+                      color: t.inkMuted,
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                goal.isComplete
-                    ? 'Funded.'
-                    : monthly != null
-                        ? '${formatMoney(monthly)} a month to hit this on time.'
-                        : '${formatMoney(goal.remaining)} to go.',
-                style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
-              ),
+              const SizedBox(width: 10),
+              Text('${(goal.progress * 100).round()}%',
+                  style: AppType.figureRow.copyWith(fontSize: 16, color: t.ink)),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _GroupHeader extends StatelessWidget {
-  final String text;
-  const _GroupHeader(this.text);
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Text(text,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-      );
-}
-
-class _Empty extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String message;
-  final VoidCallback onAdd;
-  final String addLabel;
-
-  const _Empty({
-    required this.icon,
-    required this.title,
-    required this.message,
-    required this.onAdd,
-    required this.addLabel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 44, color: cs.onSurfaceVariant),
-            const SizedBox(height: 14),
-            Text(title,
-                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, height: 1.45, color: cs.onSurfaceVariant)),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: onAdd,
-              icon: const Icon(Icons.add),
-              label: Text(addLabel),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: goal.progress.clamp(0.0, 1.0),
+              minHeight: 8,
+              backgroundColor: t.track,
+              valueColor: AlwaysStoppedAnimation(colour),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-Future<bool?> _confirm(BuildContext context, String title) => showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.expense),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Text('${formatMoney(goal.savedAmount)} saved',
+                  style: AppType.rowSub.copyWith(height: 1.0, color: t.inkBody)),
+              const SizedBox(width: 6),
+              Text('of ${formatMoney(goal.targetAmount)}',
+                  style:
+                      AppType.rowSub.copyWith(height: 1.0, color: t.inkMuted)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            goal.isComplete
+                ? 'Funded. It stays out of safe-to-spend until you spend it.'
+                : monthly != null
+                    ? '${formatMoney(monthly)} a month keeps this on time.'
+                    : 'Counted as protected, so it never shows as safe to '
+                        'spend.',
+            style: AppType.rowSub.copyWith(height: 1.45, color: t.inkMuted),
           ),
         ],
       ),
     );
+  }
+}

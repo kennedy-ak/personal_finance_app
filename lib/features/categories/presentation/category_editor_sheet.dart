@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/category_icons.dart';
+import '../../../core/design/components.dart';
+import '../../../core/design/sheets.dart';
 import '../../../core/theme.dart';
 import '../data/category_repository.dart';
 import '../domain/category.dart';
@@ -38,9 +40,7 @@ class CategoryEditorSheet extends ConsumerStatefulWidget {
       // Without this the sheet opens inside the shell's Scaffold body and the
       // floating add button is painted on top of the form.
       useRootNavigator: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (_) => CategoryEditorSheet(
         category: category,
         kind: kind,
@@ -118,104 +118,67 @@ class _CategoryEditorSheetState extends ConsumerState<CategoryEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final accent =
-        widget.kind == CategoryKind.income ? AppColors.income : AppColors.expense;
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 18,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
+    final t = CediTokens.of(context);
+
+    return SheetSurface(
       child: Form(
         key: _formKey,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: cs.outlineVariant,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                _isNew
+              SheetHeader(
+                title: _isNew
                     ? 'New ${widget.kind.label.toLowerCase()} category'
                     : 'Edit category',
-                style:
-                    const TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
               ),
-              const SizedBox(height: 18),
-              TextFormField(
+              const SizedBox(height: 16),
+              SheetField(
+                label: 'Name',
                 controller: _nameCtrl,
-                autofocus: true,
+                hint: widget.kind == CategoryKind.income
+                    ? 'Salary'
+                    : 'Transportation',
                 textCapitalization: TextCapitalization.words,
-                decoration: InputDecoration(
-                  labelText: 'Name',
-                  hintText: widget.kind == CategoryKind.income
-                      ? 'e.g. Side hustle'
-                      : 'e.g. Tithe, Chop money, Data bundle',
-                  prefixIcon: Icon(iconForKey(_icon)),
-                ),
+                autofocus: true,
                 validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
-                onFieldSubmitted: (_) {
-                  if (!_saving) _save();
-                },
+                    (v == null || v.trim().isEmpty) ? 'Give it a name' : null,
+                onChanged: (_) => setState(() {}),
               ),
-              if (!_isNew) ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Renaming also relabels every transaction already filed '
-                  'under it.',
-                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              const SizedBox(height: 16),
+              LabeledField(
+                label: 'Icon',
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final key in _iconChoices)
+                      _IconChoice(
+                        iconKey: key,
+                        // The glyph previews with the name the user is
+                        // typing, so they see the initials that will show up
+                        // on every row before they commit to it.
+                        preview: _nameCtrl.text.trim().isEmpty
+                            ? 'Category'
+                            : _nameCtrl.text.trim(),
+                        selected: _icon == key,
+                        onTap: () => setState(() => _icon = key),
+                      ),
+                  ],
                 ),
-              ],
+              ),
+              const SizedBox(height: 7),
+              Text(
+                'Rows show the first letters of the name. The icon is used '
+                'wherever there is room for one.',
+                style: AppType.rowSub.copyWith(height: 1.4, color: t.inkFaint),
+              ),
               const SizedBox(height: 20),
-              const _FieldLabel('Icon'),
-              const SizedBox(height: 10),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 200),
-                child: SingleChildScrollView(
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final entry in kPickableIcons.entries)
-                        _IconChoice(
-                          icon: entry.value,
-                          selected: _icon == entry.key,
-                          color: accent,
-                          onTap: () => setState(() => _icon = entry.key),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 22),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                  backgroundColor: accent,
-                ),
+              PrimaryButton(
+                label: _isNew ? 'Create category' : 'Save category',
+                loading: _saving,
                 onPressed: _saving ? null : _save,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.check),
-                label: Text(_isNew ? 'Create category' : 'Save changes'),
               ),
             ],
           ),
@@ -225,51 +188,60 @@ class _CategoryEditorSheetState extends ConsumerState<CategoryEditorSheet> {
   }
 }
 
+/// The icons offered in the picker, in the order a money app needs them.
+const _iconChoices = <String>[
+  'bus',
+  'restaurant',
+  'grocery',
+  'bolt',
+  'phone',
+  'home',
+  'shopping',
+  'medical',
+  'school',
+  'gift',
+  'savings',
+  'cash',
+  'work',
+  'business',
+  'trending_up',
+  'label',
+];
+
 class _IconChoice extends StatelessWidget {
-  final IconData icon;
+  final String iconKey;
+  final String preview;
   final bool selected;
-  final Color color;
   final VoidCallback onTap;
 
   const _IconChoice({
-    required this.icon,
+    required this.iconKey,
+    required this.preview,
     required this.selected,
-    required this.color,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return InkWell(
+    final t = CediTokens.of(context);
+    final hue = preview.hashCode.abs() % t.glyphSurfaces.length;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
       child: Container(
-        width: 46,
-        height: 46,
+        width: 44,
+        height: 44,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color:
-              selected ? color.withValues(alpha: 0.15) : cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: selected ? color : Colors.transparent,
-            width: 1.6,
-          ),
+          color: t.glyphSurfaces[hue],
+          shape: BoxShape.circle,
+          border: selected
+              ? Border.all(color: t.glyphInks[hue], width: 2)
+              : null,
         ),
-        child:
-            Icon(icon, size: 22, color: selected ? color : cs.onSurfaceVariant),
+        child: Icon(iconForKey(iconKey), size: 19, color: t.glyphInks[hue]),
       ),
     );
   }
-}
-
-class _FieldLabel extends StatelessWidget {
-  final String text;
-  const _FieldLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
-      );
 }
