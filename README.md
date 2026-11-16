@@ -1,9 +1,12 @@
 # Personal Finance App (Flutter)
 
 Multi-user mobile rewrite of the Streamlit personal finance tracker.
-Built with **Flutter + a self-hosted FastAPI backend** ([`backend/`](backend/README.md)),
-with a Next.js web twin in [`web/`](web/README.md) on the same server, so the
-same logins and data work everywhere.
+Built with **Flutter + a self-hosted FastAPI backend**
+([personal_finance_backend](https://github.com/kennedy-ak/personal_finance_backend)),
+with a Next.js web twin
+([personal_finance_web](https://github.com/kennedy-ak/personal_finance_web))
+on the same server, so the same logins and data work everywhere. Check the
+three repos out side by side; the steps below assume that layout.
 
 ## Features
 
@@ -31,7 +34,7 @@ same logins and data work everywhere.
 ## Stack
 
 - Flutter 3.19+
-- `backend/` — FastAPI + SQLAlchemy (SQLite by default, Postgres-ready)
+- `personal_finance_backend` — FastAPI + SQLAlchemy (SQLite by default, Postgres-ready)
 - `flutter_riverpod` — state management
 - `go_router` — navigation
 - `fl_chart` — charts
@@ -43,15 +46,15 @@ same logins and data work everywhere.
 ## 1. Run the backend
 
 ```bash
-cd backend
+cd ../personal_finance_backend
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-First boot creates the tables (SQLite file `backend/finance.db`). See
-[`backend/README.md`](backend/README.md) for `JWT_SECRET`, the coach's
-`OPENAI_API_KEY`, and pointing `DATABASE_URL` at Postgres.
+First boot creates the tables (SQLite file `finance.db` in that repo). See
+that repo's README for `JWT_SECRET`, the coach's `OPENAI_API_KEY`, and
+pointing `DATABASE_URL` at Postgres.
 
 ## 2. Configure the app
 
@@ -71,7 +74,7 @@ use your machine's LAN IP, e.g. `http://192.168.1.20:8000` (same Wi-Fi).
 ## 2b. The AI coach
 
 The backend proxies the model so the API key lives on the server, not on every
-user's phone. Set `OPENAI_API_KEY` in `backend/.env` and restart it.
+user's phone. Set `OPENAI_API_KEY` in the backend repo's `.env` and restart it.
 
 Until you do, the coach falls back to a per-user key entered in
 **Settings → AI coach**, so nothing breaks — but that key sits on the device,
@@ -104,8 +107,6 @@ APK will be at `build/app/outputs/flutter-apk/app-release.apk`.
 ## Project structure
 
 ```
-backend/
-  app/                            # FastAPI: auth, ledger, SMS import, coach proxy
 lib/
   main.dart                       # entry, ApiClient init
   app.dart                        # MaterialApp + router
@@ -125,9 +126,11 @@ lib/
     categories/ insights/ sms/ settings/ reports/
   shared/
     widgets/home_shell.dart       # bottom nav
-web/                              # Next.js twin on the same backend
 supabase/                         # legacy — the schema the backend was ported from
 ```
+
+The backend (`personal_finance_backend`) and web twin (`personal_finance_web`)
+live in their own repositories, checked out as siblings of this one.
 
 ## Currency
 
