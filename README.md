@@ -56,20 +56,22 @@ First boot creates the tables (SQLite file `finance.db` in that repo). See
 that repo's README for `JWT_SECRET`, the coach's `OPENAI_API_KEY`, and
 pointing `DATABASE_URL` at Postgres.
 
-## 2. Configure the app
+## 2. Point the app at a backend
+
+The backend URL is one compile-time constant (`lib/core/api_config.dart`)
+that defaults to production (`https://backend.eventsexclusive.africa`).
+To develop against a local backend, pass it on the command line:
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```
-API_URL=http://10.0.2.2:8000
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
 ```
 
 `10.0.2.2` is your machine as seen from the Android emulator. On a real phone
 use your machine's LAN IP, e.g. `http://192.168.1.20:8000` (same Wi-Fi).
+Debug builds allow plain-http cleartext; release builds stay HTTPS-only.
+
+The remaining `.env` (`cp .env.example .env`) only carries the optional
+per-device OpenAI fallback key for the coach.
 
 ## 2b. The AI coach
 
@@ -97,8 +99,12 @@ Pick a connected Android device or emulator.
 ### Build release APK
 
 ```bash
-flutter build apk --release
+flutter build apk --release \
+  --dart-define=API_BASE_URL=https://backend.eventsexclusive.africa
 ```
+
+(The flag is optional — the default is already the production URL — but
+passing it explicitly keeps a release honest about where it points.)
 
 APK will be at `build/app/outputs/flutter-apk/app-release.apk`.
 
