@@ -1,8 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../../../core/api_client.dart';
 import '../../../core/finance/snapshot_provider.dart';
-import '../../../core/supabase_client.dart';
 import '../../accounts/data/account_repository.dart';
 import '../../planning/data/goal_repository.dart';
 import '../../planning/data/obligation_repository.dart';
@@ -14,73 +14,45 @@ import 'coach_tools.dart';
 class CoachRepository {
   /// The thread to continue, creating one on first use.
   Future<String> currentThreadId() async {
-    final userId = supabase.auth.currentUser!.id;
-
-    final existing = await supabase
-        .from('ai_threads')
-        .select('id')
-        .order('updated_at', ascending: false)
-        .limit(1)
-        .maybeSingle();
-
-    if (existing != null) return existing['id'] as String;
-
-    final row = await supabase
-        .from('ai_threads')
-        .insert({'user_id': userId})
-        .select('id')
-        .single();
-    return row['id'] as String;
+    final res = await api.get('/coach/threads/current');
+    return (res as Map)['id'] as String;
   }
 
   Future<String> startNewThread() async {
-    final userId = supabase.auth.currentUser!.id;
-    final row = await supabase
-        .from('ai_threads')
-        .insert({'user_id': userId})
-        .select('id')
-        .single();
-    return row['id'] as String;
+    final res = await api.post('/coach/threads');
+    return (res as Map)['id'] as String;
   }
 
   Future<List<CoachMessage>> messages(String threadId) async {
-    final rows = await supabase
-        .from('ai_messages')
-        .select()
-        .eq('thread_id', threadId)
-        .order('created_at', ascending: true);
+    final rows = await api.get('/coach/threads/$threadId/messages');
     return (rows as List)
         .map((r) => CoachMessage.fromJson(r as Map<String, dynamic>))
         .toList();
   }
 
   /// Persists a turn in order, so replaying the thread reproduces exactly what
-  /// the model saw.
+  /// the model saw. The backend stamps each row a strictly later created_at.
   Future<void> saveTurn(String threadId, List<PendingMessage> messages) async {
     if (messages.isEmpty) return;
-    final userId = supabase.auth.currentUser!.id;
-
-    // Inserted one at a time because created_at ordering is what reconstructs
-    // the conversation, and a batch insert can land on identical timestamps.
-    for (final m in messages) {
-      await supabase.from('ai_messages').insert({
-        'thread_id': threadId,
-        'user_id': userId,
-        'role': m.role.wire,
-        'content': m.content,
-        'tool_calls': m.toolCalls,
-        'tool_call_id': m.toolCallId,
-        'name': m.name,
-        'actions': m.actions.isEmpty
-            ? null
-            : m.actions.map((a) => a.toJson()).toList(),
-      });
-    }
+    await api.post('/coach/threads/$threadId/messages', body: {
+      'messages': [
+        for (final m in messages)
+          {
+            'role': m.role.wire,
+            'content': m.content,
+            'tool_calls': m.toolCalls,
+            'tool_call_id': m.toolCallId,
+            'name': m.name,
+            'actions': m.actions.isEmpty
+                ? null
+                : m.actions.map((a) => a.toJson()).toList(),
+          },
+      ],
+    });
   }
 
   Future<void> clearThread(String threadId) async {
-    await supabase.from('ai_messages').delete().eq('thread_id', threadId);
-    await supabase.from('ai_threads').delete().eq('id', threadId);
+    await api.delete('/coach/threads/$threadId');
   }
 }
 

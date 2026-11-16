@@ -1,18 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../../../core/api_client.dart';
 import '../../../core/category_icons.dart';
 import '../../../core/constants.dart';
-import '../../../core/supabase_client.dart';
 import '../domain/category.dart';
 
 class CategoryRepository {
   Future<List<Category>> list() async {
-    final rows = await supabase
-        .from('categories')
-        .select()
-        .order('sort_order', ascending: true)
-        .order('name', ascending: true);
+    final rows = await api.get('/categories');
     return (rows as List)
         .map((r) => Category.fromJson(r as Map<String, dynamic>))
         .toList();
@@ -24,75 +20,58 @@ class CategoryRepository {
     String? icon,
     int sortOrder = 100,
   }) async {
-    final userId = supabase.auth.currentUser!.id;
-    final row = await supabase
-        .from('categories')
-        .insert({
-          'user_id': userId,
-          'name': name,
-          'kind': kind.value,
-          'icon': icon,
-          'sort_order': sortOrder,
-        })
-        .select()
-        .single();
-    return Category.fromJson(row);
+    final row = await api.post('/categories', body: {
+      'name': name,
+      'kind': kind.value,
+      'icon': icon,
+      'sort_order': sortOrder,
+    });
+    return Category.fromJson(row as Map<String, dynamic>);
   }
 
   /// Renames the category *and* every transaction wearing the old label.
   ///
-  /// Done in the database so reports never catch the halfway state where the
+  /// Done on the server so reports never catch the halfway state where the
   /// same spending is split across two spellings.
   Future<void> rename(String id, String newName) async {
-    await supabase.rpc('rename_category', params: {
-      'p_id': id,
-      'p_new_name': newName,
-    });
+    await api.post('/categories/$id/rename', body: {'new_name': newName});
   }
 
   Future<void> setIcon(String id, String? icon) async {
-    await supabase.from('categories').update({'icon': icon}).eq('id', id);
+    await api.patch('/categories/$id', body: {'icon': icon});
   }
 
   /// Takes a category out of the pickers without touching the ledger.
   Future<void> setHidden(String id, bool hidden) async {
-    await supabase.from('categories').update({'is_hidden': hidden}).eq('id', id);
+    await api.patch('/categories/$id', body: {'is_hidden': hidden});
   }
 
   /// How many transactions currently carry this category's label.
   Future<int> usageCount(String id) async {
-    final n = await supabase.rpc('category_usage_count', params: {'p_id': id});
-    return (n as num?)?.toInt() ?? 0;
+    final res = await api.get('/categories/$id/usage');
+    return ((res as Map)['count'] as num?)?.toInt() ?? 0;
   }
 
   /// Removes the category from the list. Transactions keep their label — the
   /// column is free text — so nothing disappears from history or reports.
   Future<void> delete(String id) async {
-    await supabase.from('categories').delete().eq('id', id);
+    await api.delete('/categories/$id');
   }
 
   /// Puts the seeded defaults back for anyone who deleted more than they meant
   /// to. Existing rows are left alone.
   Future<void> restoreDefaults() async {
-    final userId = supabase.auth.currentUser!.id;
-    await supabase.rpc('seed_default_categories', params: {'p_user': userId});
+    await api.post('/categories/restore-defaults');
   }
 }
 
-/// Whether a failure is "the categories table does not exist yet".
-///
-/// Worth singling out because it is not a bug the user can do anything about
-/// by retrying: PostgREST answers PGRST205 until migration 0007 has been run
-/// against the project, and reads quietly fall back to the built-in list, so
-/// the first sign of it is a save that fails for no visible reason.
-bool isCategoriesTableMissing(Object error) {
-  final s = error.toString();
-  return s.contains('PGRST205') || s.contains('public.categories');
-}
+/// With the FastAPI backend the categories table is created on boot, so a
+/// "table missing" failure cannot happen anymore. Kept because the category
+/// screens still branch on it; it now simply never matches.
+bool isCategoriesTableMissing(Object error) => false;
 
 const String kCategoriesSetupHint =
-    'Categories are not set up on the server yet. Run '
-    '0007_custom_categories.sql in the Supabase SQL editor, then try again.';
+    'Categories are not available on the server right now. Try again.';
 
 final categoryRepositoryProvider = Provider((_) => CategoryRepository());
 
@@ -121,11 +100,10 @@ final categoryIconSyncProvider = Provider<void>((ref) {
 
 /// What the pickers offer: nothing hidden, in the user's own order.
 ///
-/// Falls back to the old constants only when there is nothing at all to show —
-/// the list is still loading, or migration 0007 has not been run against this
-/// project. Someone who has deliberately hidden every category gets an empty
-/// picker, because quietly resurrecting the list they just cleared would be
-/// the app arguing with them.
+/// Falls back to the old constants only when there is nothing at all to show.
+/// Someone who has deliberately hidden every category gets an empty picker,
+/// because quietly resurrecting the list they just cleared would be the app
+/// arguing with them.
 List<String> _names(List<Category> all, CategoryKind kind, List<String> fallback) {
   final ofKind = all.where((c) => c.kind == kind);
   if (ofKind.isEmpty) return fallback;

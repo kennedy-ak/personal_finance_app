@@ -65,18 +65,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
-  /// Supabase says "Invalid login credentials", which does not tell anyone
-  /// which of the two fields to fix. The screen set answers that directly.
-  String _readable(Object e) {
-    final raw = e.toString().replaceFirst('AuthApiException: ', '');
-    if (raw.toLowerCase().contains('invalid login credentials')) {
-      return 'That password does not match this email. Try again or reset it.';
-    }
-    if (raw.toLowerCase().contains('email not confirmed')) {
-      return 'This email is not confirmed yet. Check your inbox for the link.';
-    }
-    return raw;
-  }
+  /// The backend already answers in plain words, so mostly pass it through.
+  String _readable(Object e) => e.toString();
 
   Future<void> _resetPassword() async {
     final email = _emailCtrl.text.trim();

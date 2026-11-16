@@ -1,16 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
-import '../../../core/supabase_client.dart';
+import '../../../core/api_client.dart';
 import '../domain/chat_message.dart';
 
 class ChatRepository {
   Future<List<ChatMessage>> list({int limit = 50}) async {
-    final rows = await supabase
-        .from('ai_chats')
-        .select()
-        .order('created_at', ascending: false)
-        .limit(limit);
+    final rows = await api.get('/coach/chats', query: {'limit': '$limit'});
     return (rows as List)
         .map((r) => ChatMessage.fromJson(r as Map<String, dynamic>))
         .toList();
@@ -20,26 +16,19 @@ class ChatRepository {
     required String question,
     required String answer,
   }) async {
-    final userId = supabase.auth.currentUser!.id;
-    final row = await supabase
-        .from('ai_chats')
-        .insert({
-          'user_id': userId,
-          'question': question,
-          'answer': answer,
-        })
-        .select()
-        .single();
-    return ChatMessage.fromJson(row);
+    final row = await api.post('/coach/chats', body: {
+      'question': question,
+      'answer': answer,
+    });
+    return ChatMessage.fromJson(row as Map<String, dynamic>);
   }
 
   Future<void> delete(String id) async {
-    await supabase.from('ai_chats').delete().eq('id', id);
+    await api.delete('/coach/chats/$id');
   }
 
   Future<void> clearAll() async {
-    final userId = supabase.auth.currentUser!.id;
-    await supabase.from('ai_chats').delete().eq('user_id', userId);
+    await api.delete('/coach/chats');
   }
 }
 

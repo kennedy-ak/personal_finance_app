@@ -31,6 +31,11 @@ const _tipChannelDesc = 'Personalised finance tips powered by AI';
 const _tipNotifIdBase = 1002;
 const _tipNotifMaxBatch = 7;
 
+const _scanChannelId = 'pursely_sms';
+const _scanChannelName = 'SMS import';
+const _scanChannelDesc = 'Results of inbox scans';
+const _scanNotifId = 3001;
+
 const _messages = <Map<String, String>>[
   {
     'title': '💸 30 seconds for your money',
@@ -78,6 +83,13 @@ class NotificationService {
         _tipChannelId, _tipChannelName,
         description: _tipChannelDesc,
         importance: Importance.high,
+      ),
+    );
+    await androidImpl?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _scanChannelId, _scanChannelName,
+        description: _scanChannelDesc,
+        importance: Importance.defaultImportance,
       ),
     );
     _initialised = true;
@@ -199,6 +211,25 @@ class NotificationService {
         );
       }
     }
+  }
+
+  /// Posts a scan-result notification right now — the "you can walk away"
+  /// half of background scanning.
+  Future<void> showScanResult(String title, String body) async {
+    await init();
+    await _plugin.show(
+      _scanNotifId,
+      title,
+      body,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _scanChannelId, _scanChannelName,
+          channelDescription: _scanChannelDesc,
+          importance: Importance.defaultImportance,
+          priority: Priority.defaultPriority,
+        ),
+      ),
+    );
   }
 
   Future<void> showTest() async {

@@ -16,10 +16,11 @@ import '../features/payments/presentation/pay_screen.dart';
 import '../features/planning/presentation/plan_screen.dart';
 import '../features/reports/presentation/reports_screen.dart';
 import '../features/settings/presentation/settings_screen.dart';
+import '../features/sms/presentation/sms_import_screen.dart';
 import '../features/transactions/presentation/add_transaction_screen.dart';
 import '../features/transactions/presentation/history_screen.dart';
 import '../shared/widgets/home_shell.dart';
-import 'supabase_client.dart';
+import 'api_client.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   ref.watch(authStateProvider);
@@ -28,8 +29,7 @@ final routerProvider = Provider<GoRouter>((ref) {
     initialLocation: '/',
     refreshListenable: _AuthRefresh(ref),
     redirect: (ctx, state) {
-      final session = supabase.auth.currentSession;
-      final loggedIn = session != null;
+      final loggedIn = api.isSignedIn;
       final seenSplash = ref.read(splashSeenProvider);
       final loc = state.matchedLocation;
       final atSplash = loc == '/splash';
@@ -45,6 +45,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/signup', builder: (_, _) => const SignupScreen()),
       GoRoute(path: '/add', builder: (_, _) => const AddTransactionScreen()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
+      GoRoute(path: '/sms-import', builder: (_, _) => const SmsImportScreen()),
       GoRoute(path: '/categories', builder: (_, _) => const CategoriesScreen()),
       GoRoute(path: '/ai-history', builder: (_, _) => const AiHistoryScreen()),
       GoRoute(path: '/plan', builder: (_, _) => const PlanScreen()),

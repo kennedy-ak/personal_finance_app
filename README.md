@@ -1,12 +1,14 @@
 # Personal Finance App (Flutter)
 
 Multi-user mobile rewrite of the Streamlit personal finance tracker.
-Built with **Flutter + Supabase** (auth, Postgres, RLS).
+Built with **Flutter + a self-hosted FastAPI backend** ([`backend/`](backend/README.md)),
+with a Next.js web twin in [`web/`](web/README.md) on the same server, so the
+same logins and data work everywhere.
 
 ## Features
 
-- Email/password auth (Supabase Auth)
-- Per-user accounts and transactions (RLS-enforced isolation)
+- Email/password auth (FastAPI + JWT — accounts work immediately, no email round trip)
+- Per-user accounts and transactions (every query scoped to the token's user)
 - Add Income / Expense transactions, categorized
 - Dashboard: total balance, account list, recent transactions, expense-by-category pie chart
 - Transaction history with filters (type / account / category / date range) and CSV export
@@ -20,15 +22,16 @@ Built with **Flutter + Supabase** (auth, Postgres, RLS).
 - Deterministic alerts: running short before payday, accounts under their floor, bills the account can't cover, category spikes. Detected in Dart, so they can't be hallucinated
 - **"Where should this come from?"** — enter an amount and the app picks the account, says why not the others, splits across accounts when needed, and works out the top-up transfer when the money has to leave one specific account
 - **A coach that remembers and acts** — threaded conversations, nine tools over the money engine (position, alerts, accounts, commitments, spending, transactions, payment planning), and proposals rendered as cards with an Apply button. It never does arithmetic and never moves money on its own
-- Model API key held server-side in a Supabase Edge Function, with a per-user-key fallback
+- Model API key held server-side (`POST /coach/complete`), with a per-user-key fallback
+- SMS import (Android): MoMo and bank alerts become ledger rows, deduplicated server-side
 - Account management (create / rename / adjust balance / delete)
-- Server-side balance recomputation via Postgres trigger (no client drift)
-- Default accounts auto-seeded on signup
+- Server-side balance recomputation after every write (no client drift)
+- Default accounts and categories auto-seeded on signup
 
 ## Stack
 
 - Flutter 3.19+
-- `supabase_flutter` — auth + DB
+- `backend/` — FastAPI + SQLAlchemy (SQLite by default, Postgres-ready)
 - `flutter_riverpod` — state management
 - `go_router` — navigation
 - `fl_chart` — charts
@@ -37,17 +40,18 @@ Built with **Flutter + Supabase** (auth, Postgres, RLS).
 
 ---
 
-## 1. Set up Supabase
+## 1. Run the backend
 
-1. Create a free project at https://supabase.com
-2. In **SQL Editor**, run these in order:
-   - [`supabase/schema.sql`](supabase/schema.sql) — base tables, RLS, triggers
-   - [`supabase/migrations/0002_money_foundation.sql`](supabase/migrations/0002_money_foundation.sql) — transfers, account metadata, obligations, goals. Safe to re-run.
-   - [`supabase/migrations/0003_convert_legacy_transfers.sql`](supabase/migrations/0003_convert_legacy_transfers.sql) — **optional, one-time.** Rewrites old faked transfer pairs as single rows. Back up first; your figures are already correct without it.
-   - [`supabase/migrations/0004_coach_memory.sql`](supabase/migrations/0004_coach_memory.sql) — conversation threads and messages for the coach. Safe to re-run.
-3. In **Authentication → Providers**, enable **Email**.
-   For dev, disable "Confirm email" so signups log in immediately.
-4. Grab your **Project URL** and **anon public key** from **Settings → API**.
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+First boot creates the tables (SQLite file `backend/finance.db`). See
+[`backend/README.md`](backend/README.md) for `JWT_SECRET`, the coach's
+`OPENAI_API_KEY`, and pointing `DATABASE_URL` at Postgres.
 
 ## 2. Configure the app
 
@@ -58,32 +62,25 @@ cp .env.example .env
 Edit `.env`:
 
 ```
-SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-SUPABASE_ANON_KEY=YOUR-ANON-KEY
+API_URL=http://10.0.2.2:8000
 ```
 
-> The anon key is safe to ship in the client — RLS policies enforce per-user access.
+`10.0.2.2` is your machine as seen from the Android emulator. On a real phone
+use your machine's LAN IP, e.g. `http://192.168.1.20:8000` (same Wi-Fi).
 
-## 2b. Deploy the AI coach (optional but recommended)
+## 2b. The AI coach
 
-The coach runs through a Supabase Edge Function so the model API key lives on the
-server, not on every user's phone:
+The backend proxies the model so the API key lives on the server, not on every
+user's phone. Set `OPENAI_API_KEY` in `backend/.env` and restart it.
 
-```bash
-supabase secrets set OPENAI_API_KEY=sk-...
-supabase functions deploy coach
-```
-
-Optionally `supabase secrets set COACH_MODEL=gpt-4o-mini` to pick the model.
-
-Until you deploy it, the coach falls back to a per-user key entered in
+Until you do, the coach falls back to a per-user key entered in
 **Settings → AI coach**, so nothing breaks — but that key sits on the device,
-which is what the function exists to fix.
+which is what the server path exists to fix.
 
-**The function does no financial reasoning.** It verifies the caller's JWT,
+**The proxy does no financial reasoning.** It verifies the caller's token,
 forwards the request, and returns the response. All the maths lives in the Dart
-money engine, which is tested; a second implementation in TypeScript would drift
-from it. Tools run on the client against that engine.
+money engine, which is tested; a second implementation would drift from it.
+Tools run on the client against that engine.
 
 ## 3. Run
 
@@ -92,7 +89,7 @@ flutter pub get
 flutter run
 ```
 
-Pick a connected Android device, iOS simulator, or run on web with `flutter run -d chrome`.
+Pick a connected Android device or emulator.
 
 ### Build release APK
 
@@ -107,12 +104,14 @@ APK will be at `build/app/outputs/flutter-apk/app-release.apk`.
 ## Project structure
 
 ```
+backend/
+  app/                            # FastAPI: auth, ledger, SMS import, coach proxy
 lib/
-  main.dart                       # entry, Supabase init
+  main.dart                       # entry, ApiClient init
   app.dart                        # MaterialApp + router
   core/
     router.dart                   # go_router with auth redirect
-    supabase_client.dart
+    api_client.dart               # bearer-token HTTP client (the one way to the server)
     theme.dart
     formatters.dart               # currency / date helpers
     constants.dart                # category lists
@@ -122,34 +121,12 @@ lib/
       payment_planner.dart        # which account a payment should come from
       snapshot_provider.dart      # the app's single view of your money
   features/
-    auth/
-      data/auth_repository.dart
-      presentation/login_screen.dart
-      presentation/signup_screen.dart
-    accounts/
-      data/account_repository.dart
-      domain/account.dart
-      presentation/accounts_screen.dart
-    transactions/
-      data/transaction_repository.dart
-      domain/transaction.dart
-      presentation/add_transaction_screen.dart
-      presentation/history_screen.dart
-    payments/
-      presentation/pay_screen.dart # "I need to send X — where from?"
-    planning/
-      domain/obligation.dart      # bills + expected income, with recurrence
-      domain/goal.dart
-      data/…                      # repositories
-      presentation/plan_screen.dart
-    dashboard/
-      presentation/dashboard_screen.dart
-      presentation/widgets/        # safe-to-spend hero, placement bar, alerts
+    auth/ accounts/ transactions/ payments/ planning/ dashboard/
+    categories/ insights/ sms/ settings/ reports/
   shared/
     widgets/home_shell.dart       # bottom nav
-supabase/
-  schema.sql                      # base tables, RLS, triggers
-  migrations/                     # run after schema.sql, in order
+web/                              # Next.js twin on the same backend
+supabase/                         # legacy — the schema the backend was ported from
 ```
 
 ## Currency
@@ -158,9 +135,6 @@ Defaults to GHS (Ghana cedi). Change in `lib/core/formatters.dart`.
 
 ## Roadmap (v2)
 
-- Weekly reports tab (matches old Streamlit weekly view)
-- AI financial insights (via Supabase Edge Function — keeps API key off-device)
-- Migration script: SQLite (`expense_tracker.db`) → Supabase
 - Recurring transactions
 - Budget targets per category
 - iOS build + Apple sign-in

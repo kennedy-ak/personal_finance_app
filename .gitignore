@@ -48,3 +48,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+.env.bak*
+
+# Backend (FastAPI)
+backend/.venv/
+backend/finance.db
+backend/e2e.db
+backend/__pycache__/
+**/__pycache__/

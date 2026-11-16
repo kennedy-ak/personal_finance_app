@@ -50,16 +50,14 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
             name: _nameCtrl.text,
           );
       if (!mounted) return;
-      if (res.session != null) {
+      if (res.signedIn) {
         context.go('/');
       } else {
         setState(() => _info =
-            'Account created. Confirm your email, then log in and add your '
-            'accounts.');
+            'Account created. Log in and add your accounts.');
       }
     } catch (e) {
-      setState(() =>
-          _error = e.toString().replaceFirst('AuthApiException: ', ''));
+      setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }

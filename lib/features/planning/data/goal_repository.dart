@@ -1,18 +1,16 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../../../core/api_client.dart';
 import '../../../core/formatters.dart';
-import '../../../core/supabase_client.dart';
 import '../domain/goal.dart';
 
 class GoalRepository {
   Future<List<Goal>> list() async {
-    final rows = await supabase
-        .from('goals')
-        .select()
-        .order('priority', ascending: true)
-        .order('created_at', ascending: true);
-    return (rows as List).map((r) => Goal.fromJson(r as Map<String, dynamic>)).toList();
+    final rows = await api.get('/goals');
+    return (rows as List)
+        .map((r) => Goal.fromJson(r as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Goal> create({
@@ -23,21 +21,15 @@ class GoalRepository {
     String? accountId,
     int priority = 0,
   }) async {
-    final userId = supabase.auth.currentUser!.id;
-    final row = await supabase
-        .from('goals')
-        .insert({
-          'user_id': userId,
-          'name': name,
-          'target_amount': targetAmount,
-          'saved_amount': savedAmount,
-          'target_date': targetDate == null ? null : dateFmt.format(targetDate),
-          'account_id': accountId,
-          'priority': priority,
-        })
-        .select()
-        .single();
-    return Goal.fromJson(row);
+    final row = await api.post('/goals', body: {
+      'name': name,
+      'target_amount': targetAmount,
+      'saved_amount': savedAmount,
+      'target_date': targetDate == null ? null : dateFmt.format(targetDate),
+      'account_id': accountId,
+      'priority': priority,
+    });
+    return Goal.fromJson(row as Map<String, dynamic>);
   }
 
   Future<void> update(
@@ -64,7 +56,7 @@ class GoalRepository {
       'is_active': ?isActive,
     };
     if (patch.isEmpty) return;
-    await supabase.from('goals').update(patch).eq('id', id);
+    await api.patch('/goals/$id', body: patch);
   }
 
   /// Adds to (or subtracts from) what has been set aside, never below zero.
@@ -74,7 +66,7 @@ class GoalRepository {
   }
 
   Future<void> delete(String id) async {
-    await supabase.from('goals').delete().eq('id', id);
+    await api.delete('/goals/$id');
   }
 }
 

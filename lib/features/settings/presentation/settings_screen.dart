@@ -13,6 +13,7 @@ import '../../insights/data/api_key_store.dart';
 import '../../insights/data/daily_tip_service.dart';
 import '../../planning/data/goal_repository.dart';
 import '../../planning/data/obligation_repository.dart';
+import '../../sms/data/sms_import_repository.dart';
 
 /// Everything that changes how the app behaves, in four groups.
 ///
@@ -38,6 +39,7 @@ class SettingsScreen extends ConsumerWidget {
     final activeCategories = (ref.watch(allCategoriesProvider).value ?? [])
         .where((c) => !c.isHidden)
         .length;
+    final smsQueue = (ref.watch(smsInboxProvider).value ?? []).length;
 
     return Scaffold(
       backgroundColor: t.canvas,
@@ -64,7 +66,7 @@ class SettingsScreen extends ConsumerWidget {
                 child: Row(
                   children: [
                     CategoryGlyph(
-                      name: repo.displayName ?? user.email ?? '?',
+                      name: repo.displayName ?? user.email,
                       hue: 0,
                       size: 40,
                     ),
@@ -80,7 +82,7 @@ class SettingsScreen extends ConsumerWidget {
                               style: AppType.rowTitle
                                   .copyWith(fontSize: 15, color: t.ink)),
                           const SizedBox(height: 4),
-                          Text(user.email ?? '',
+                          Text(user.email,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: AppType.rowSub
@@ -109,6 +111,14 @@ class SettingsScreen extends ConsumerWidget {
                   label: 'Categories',
                   value: '$activeCategories active',
                   onTap: () => context.push('/categories'),
+                ),
+                _SettingRow(
+                  label: 'SMS import',
+                  value: smsQueue == 0
+                      ? 'Read MoMo & bank alerts'
+                      : '$smsQueue message${smsQueue == 1 ? '' : 's'} to review',
+                  detail: 'Alerts become records without typing them',
+                  onTap: () => context.push('/sms-import'),
                 ),
               ],
             ),

@@ -32,6 +32,13 @@ class Txn {
   final DateTime date;
   final DateTime createdAt;
 
+  /// Where this row came from: typed by hand or read off a bank/MoMo alert.
+  final String source;
+
+  /// The bank's identifier for the movement, set on rows imported from SMS.
+  /// Null on manual rows, where there is nothing to dedupe against.
+  final String? externalRef;
+
   const Txn({
     required this.id,
     required this.userId,
@@ -43,7 +50,11 @@ class Txn {
     required this.description,
     required this.date,
     required this.createdAt,
+    this.source = 'manual',
+    this.externalRef,
   });
+
+  bool get cameFromSms => source == 'sms';
 
   /// Whether this row represents real money entering or leaving the user's
   /// control, as opposed to shuffling it between their own accounts.
@@ -79,5 +90,7 @@ class Txn {
         description: j['description'] as String?,
         date: DateTime.parse(j['date'] as String),
         createdAt: DateTime.parse(j['created_at'] as String),
+        source: (j['source'] as String?) ?? 'manual',
+        externalRef: j['external_ref'] as String?,
       );
 }

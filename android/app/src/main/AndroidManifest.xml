@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- SMS import: reads transaction alerts from senders the user linked.
+         Sideload/personal use only — the Play Store does not grant READ_SMS
+         to apps that are not the default SMS handler. -->
+    <uses-permission android:name="android.permission.READ_SMS"/>
     <!-- Nothing here wants the user's location. Stripped rather than
          tolerated: a dependency that merges one in should not be able to
          widen what the install prompt says about this app. -->

@@ -1,13 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../../../core/api_client.dart';
 import '../../../core/formatters.dart';
-import '../../../core/supabase_client.dart';
 import '../domain/obligation.dart';
 
 class ObligationRepository {
   Future<List<Obligation>> list() async {
-    final rows = await supabase.from('obligations').select().order('next_due', ascending: true);
+    final rows = await api.get('/obligations');
     return (rows as List)
         .map((r) => Obligation.fromJson(r as Map<String, dynamic>))
         .toList();
@@ -22,22 +22,16 @@ class ObligationRepository {
     String? accountId,
     String? category,
   }) async {
-    final userId = supabase.auth.currentUser!.id;
-    final row = await supabase
-        .from('obligations')
-        .insert({
-          'user_id': userId,
-          'name': name,
-          'direction': direction.value,
-          'amount': amount,
-          'cadence': cadence.value,
-          'next_due': dateFmt.format(nextDue),
-          'account_id': accountId,
-          'category': category,
-        })
-        .select()
-        .single();
-    return Obligation.fromJson(row);
+    final row = await api.post('/obligations', body: {
+      'name': name,
+      'direction': direction.value,
+      'amount': amount,
+      'cadence': cadence.value,
+      'next_due': dateFmt.format(nextDue),
+      'account_id': accountId,
+      'category': category,
+    });
+    return Obligation.fromJson(row as Map<String, dynamic>);
   }
 
   Future<void> update(
@@ -62,11 +56,11 @@ class ObligationRepository {
       'is_active': ?isActive,
     };
     if (patch.isEmpty) return;
-    await supabase.from('obligations').update(patch).eq('id', id);
+    await api.patch('/obligations/$id', body: patch);
   }
 
   Future<void> delete(String id) async {
-    await supabase.from('obligations').delete().eq('id', id);
+    await api.delete('/obligations/$id');
   }
 }
 

@@ -1,17 +1,15 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
-import '../../../core/supabase_client.dart';
+import '../../../core/api_client.dart';
 import '../domain/account.dart';
 
 class AccountRepository {
   Future<List<Account>> list() async {
-    final rows = await supabase
-        .from('accounts')
-        .select()
-        .order('sort_order', ascending: true)
-        .order('name', ascending: true);
-    return (rows as List).map((r) => Account.fromJson(r as Map<String, dynamic>)).toList();
+    final rows = await api.get('/accounts');
+    return (rows as List)
+        .map((r) => Account.fromJson(r as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Account> create({
@@ -23,25 +21,18 @@ class AccountRepository {
     String? purpose,
     int sortOrder = 0,
   }) async {
-    final userId = supabase.auth.currentUser!.id;
-    final row = await supabase
-        .from('accounts')
-        .insert({
-          'user_id': userId,
-          'name': name,
-          // A brand-new account has no transactions, so its balance is exactly
-          // its opening balance. The DB trigger keeps them consistent after this.
-          'opening_balance': openingBalance,
-          'balance': openingBalance,
-          'kind': kind.value,
-          'liquidity': liquidity.value,
-          'min_balance': minBalance,
-          'purpose': purpose,
-          'sort_order': sortOrder,
-        })
-        .select()
-        .single();
-    return Account.fromJson(row);
+    final row = await api.post('/accounts', body: {
+      'name': name,
+      // A brand-new account has no transactions, so its balance is exactly
+      // its opening balance. The backend keeps them consistent after this.
+      'opening_balance': openingBalance,
+      'kind': kind.value,
+      'liquidity': liquidity.value,
+      'min_balance': minBalance,
+      'purpose': purpose,
+      'sort_order': sortOrder,
+    });
+    return Account.fromJson(row as Map<String, dynamic>);
   }
 
   Future<void> update(
@@ -64,28 +55,27 @@ class AccountRepository {
       'sort_order': ?sortOrder,
     };
     if (patch.isEmpty) return;
-    await supabase.from('accounts').update(patch).eq('id', id);
+    await api.patch('/accounts/$id', body: patch);
   }
 
   /// Corrects the balance without inventing a transaction.
   ///
-  /// The balance column itself is derived — the database recomputes it from
+  /// The balance column itself is derived — the backend recomputes it from
   /// opening balance plus transactions. To make the displayed balance land on
   /// [newBalance] we adjust the opening balance by the difference and let the
-  /// trigger settle it.
+  /// backend settle it.
   Future<void> reconcileBalance(Account account, double newBalance) async {
     final delta = newBalance - account.balance;
     if (delta.abs() < 0.005) return;
-    await supabase
-        .from('accounts')
-        .update({'opening_balance': account.openingBalance + delta})
-        .eq('id', account.id);
+    await api.patch('/accounts/${account.id}', body: {
+      'opening_balance': account.openingBalance + delta,
+    });
   }
 
   Future<void> rename(String id, String name) => update(id, name: name);
 
   Future<void> delete(String id) async {
-    await supabase.from('accounts').delete().eq('id', id);
+    await api.delete('/accounts/$id');
   }
 }
 

@@ -3,9 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../core/supabase_client.dart';
+import '../../../core/api_client.dart';
 import 'api_key_store.dart';
 
 class CoachException implements Exception {
@@ -28,52 +27,43 @@ abstract class CoachTransport {
 }
 
 /// The intended path: the key lives on the server, not on the phone.
-class EdgeFunctionTransport implements CoachTransport {
-  final SupabaseClient client;
+/// POST /coach/complete on the FastAPI backend — the Edge Function's successor.
+class ServerCoachTransport implements CoachTransport {
+  final ApiClient client;
 
-  EdgeFunctionTransport({SupabaseClient? client}) : client = client ?? supabase;
+  ServerCoachTransport({ApiClient? client}) : client = client ?? api;
 
   @override
-  String get label => 'Server (Supabase Edge Function)';
+  String get label => 'Server (FastAPI backend)';
 
   @override
   Future<Map<String, dynamic>> complete({
     required List<Map<String, dynamic>> messages,
     List<Map<String, dynamic>>? tools,
   }) async {
-    final FunctionResponse res;
+    final dynamic data;
     try {
-      res = await client.functions.invoke('coach', body: {
+      data = await client.post('/coach/complete', body: {
         'messages': messages,
         'tools': ?tools,
       });
-    } on FunctionException catch (e) {
-      throw CoachException(_describe(e));
+    } on ApiException catch (e) {
+      throw CoachException(e.message);
     }
 
-    final data = res.data;
     if (data is! Map) {
       throw CoachException('The coach returned an unexpected response.');
     }
     return _firstMessage(Map<String, dynamic>.from(data));
   }
-
-  String _describe(FunctionException e) {
-    final details = e.details;
-    if (details is Map && details['error'] is String) {
-      return details['error'] as String;
-    }
-    if (details is String && details.isNotEmpty) return details;
-    return 'The coach is unavailable (${e.status}).';
-  }
 }
 
-/// Fallback for anyone who has not deployed the function yet: the old
-/// per-user key, read from the device.
+/// Fallback for when the backend has no OPENAI_API_KEY: the old per-user key,
+/// read from the device.
 ///
 /// Kept so upgrading the app never leaves someone without a working coach. It
 /// is not the destination — the key sitting on the phone is exactly what the
-/// Edge Function exists to fix.
+/// server path exists to fix.
 class DirectKeyTransport implements CoachTransport {
   final String apiKey;
   final String model;
@@ -128,8 +118,8 @@ class DirectKeyTransport implements CoachTransport {
   }
 }
 
-/// Prefers the server, drops back to the on-device key if the function is not
-/// deployed yet.
+/// Prefers the server, drops back to the on-device key if the backend has no
+/// model key configured.
 ///
 /// The fallback is deliberately one-way and sticky for the session: once the
 /// server has answered, we never quietly start billing the user's own key.
@@ -190,7 +180,7 @@ final coachTransportProvider = FutureProvider<CoachTransport>((ref) async {
   final model = await store.getModel();
 
   return FallbackTransport(
-    primary: EdgeFunctionTransport(),
+    primary: ServerCoachTransport(),
     secondary: key == null || key.isEmpty
         ? null
         : DirectKeyTransport(apiKey: key, model: model),
