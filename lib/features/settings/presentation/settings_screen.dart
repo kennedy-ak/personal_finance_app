@@ -153,12 +153,13 @@ class SettingsScreen extends ConsumerWidget {
             _Group(
               label: 'AI coach',
               children: [
+                // The chat coach runs entirely on the server; this key only
+                // feeds the optional per-device daily-tips feature.
                 _SettingRow(
-                  label: 'Fallback API key',
+                  label: 'Daily tips API key',
                   value: keyAsync.value?.isNotEmpty == true ? 'Set' : 'Not set',
-                  detail: keyAsync.value?.isNotEmpty == true
-                      ? 'Used only if the server coach is unavailable'
-                      : 'The coach runs on the server',
+                  detail: 'Optional. Used only by daily tips — the chat coach '
+                      'runs on the server',
                   onTap: () => _showApiKeySheet(context, ref),
                 ),
                 _SettingRow(
@@ -208,11 +209,11 @@ class SettingsScreen extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SheetHeader(title: 'Fallback API key'),
+            const SheetHeader(title: 'Daily tips API key'),
             const SizedBox(height: 10),
             Text(
-              'Only used if the server coach cannot be reached. The key is '
-              'stored on this device.',
+              'Optional. Only used by the daily tips feature — the chat coach '
+              'runs on the server. The key is stored on this device.',
               style: AppType.bodySmall.copyWith(height: 1.5, color: t.inkMuted),
             ),
             const SizedBox(height: 16),

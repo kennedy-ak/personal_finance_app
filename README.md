@@ -24,7 +24,7 @@ three repos out side by side; the steps below assume that layout.
 - "Where your money is" bar — spendable vs bills vs protected vs reserved vs locked
 - Deterministic alerts: running short before payday, accounts under their floor, bills the account can't cover, category spikes. Detected in Dart, so they can't be hallucinated
 - **"Where should this come from?"** — enter an amount and the app picks the account, says why not the others, splits across accounts when needed, and works out the top-up transfer when the money has to leave one specific account
-- **A coach that remembers and acts** — threaded conversations, nine tools over the money engine (position, alerts, accounts, commitments, spending, transactions, payment planning), and proposals rendered as cards with an Apply button. It never does arithmetic and never moves money on its own
+- **A coach that remembers and acts** — threaded conversations, server-side tools over your own data (position, alerts, accounts, commitments, spending, transactions, payment planning, SMS), and proposals rendered as cards with an Apply button. It never does arithmetic and never moves money on its own
 - Model API key held server-side (`POST /coach/complete`), with a per-user-key fallback
 - SMS import (Android): MoMo and bank alerts become ledger rows, deduplicated server-side
 - Account management (create / rename / adjust balance / delete)
@@ -53,7 +53,7 @@ python -m venv .venv
 ```
 
 First boot creates the tables (SQLite file `finance.db` in that repo). See
-that repo's README for `JWT_SECRET`, the coach's `OPENAI_API_KEY`, and
+that repo's README for `JWT_SECRET`, the coach's `ANTHROPIC_API_KEY`, and
 pointing `DATABASE_URL` at Postgres.
 
 ## 2. Point the app at a backend
@@ -71,21 +71,20 @@ use your machine's LAN IP, e.g. `http://192.168.1.20:8000` (same Wi-Fi).
 Debug builds allow plain-http cleartext; release builds stay HTTPS-only.
 
 The remaining `.env` (`cp .env.example .env`) only carries the optional
-per-device OpenAI fallback key for the coach.
+per-device OpenAI key for the daily-tips feature.
 
 ## 2b. The AI coach
 
-The backend proxies the model so the API key lives on the server, not on every
-user's phone. Set `OPENAI_API_KEY` in the backend repo's `.env` and restart it.
+The coach runs on the server: `POST /coach/ask` calls Anthropic and executes
+tools against your own data — position, spending, commitments, goals, SMS —
+then returns the finished answer and any proposals. Set `ANTHROPIC_API_KEY` in
+the backend repo's `.env` and restart it.
 
-Until you do, the coach falls back to a per-user key entered in
-**Settings → AI coach**, so nothing breaks — but that key sits on the device,
-which is what the server path exists to fix.
-
-**The proxy does no financial reasoning.** It verifies the caller's token,
-forwards the request, and returns the response. All the maths lives in the Dart
-money engine, which is tested; a second implementation would drift from it.
-Tools run on the client against that engine.
+**The model never does arithmetic.** The money engine (safe-to-spend, runway,
+alerts, payment planning) is ported and tested on the server
+(`app/services/money.py`); the tools return those figures and the model only
+phrases them. Proposals arrive as cards — applying one is your tap, never the
+coach.
 
 ## 3. Run
 
