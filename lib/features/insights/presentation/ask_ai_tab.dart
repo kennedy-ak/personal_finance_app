@@ -112,7 +112,6 @@ class _AskAiTabState extends ConsumerState<AskAiTab> {
   final _scroll = ScrollController();
 
   String? _pendingQuestion;
-  List<String> _activeTools = const [];
   String? _error;
   bool _loading = false;
 
@@ -138,32 +137,19 @@ class _AskAiTabState extends ConsumerState<AskAiTab> {
       _loading = true;
       _error = null;
       _pendingQuestion = question;
-      _activeTools = const [];
       _ctrl.clear();
     });
     FocusScope.of(context).unfocus();
     _scrollToBottom();
 
     try {
-      final transport = await ref.read(coachTransportProvider.future);
-      final context_ = await ref.read(coachContextProvider.future);
+      // The server runs the tools, answers and saves the turn; invalidating
+      // the cache is what renders the finished messages.
       final threadId = await ref.read(coachThreadIdProvider.future);
-      final history = await ref.read(coachMessagesProvider.future);
-
-      final turn = await CoachService(transport: transport).send(
+      await CoachService(ask: ref.read(serverCoachTransportProvider).ask).send(
         question: question,
-        history: history,
-        context: context_,
+        threadId: threadId,
       );
-      if (mounted) setState(() => _activeTools = turn.toolsUsed);
-
-      try {
-        await ref.read(coachRepositoryProvider).saveTurn(threadId, turn.messages);
-      } catch (e) {
-        // Losing the transcript is not worth losing the answer over, but the
-        // coach will not remember this exchange next time.
-        debugPrint('Coach: could not save the turn: $e');
-      }
 
       ref.invalidate(coachMessagesProvider);
       if (!mounted) return;
@@ -268,7 +254,7 @@ class _AskAiTabState extends ConsumerState<AskAiTab> {
                           _Bubble.pendingUser(_pendingQuestion!),
                           const SizedBox(height: 12),
                         ],
-                        if (_loading) _Thinking(tools: _activeTools),
+                        if (_loading) const _Thinking(),
                         if (_error != null)
                           _CoachError(
                             onRetry: () {
@@ -276,7 +262,6 @@ class _AskAiTabState extends ConsumerState<AskAiTab> {
                               setState(() => _error = null);
                               if (q != null) _ask(q);
                             },
-                            onUseOwnKey: () => context.push('/settings'),
                           ),
                       ],
                     ),
@@ -564,29 +549,15 @@ class _Bubble extends StatelessWidget {
   }
 }
 
-/// Shows what the coach is looking up, so waiting reads as work happening
-/// rather than as a stalled spinner.
+/// Shows waiting as work happening rather than as a stalled spinner. The
+/// server runs the whole loop now, so per-tool labels never reach the app.
 class _Thinking extends StatelessWidget {
-  final List<String> tools;
-  const _Thinking({required this.tools});
-
-  static const _labels = {
-    'get_position': 'Checking your position',
-    'get_alerts': 'Looking for problems',
-    'list_accounts': 'Reading your accounts',
-    'list_commitments': 'Checking what you owe',
-    'plan_payment': 'Working out where to pay from',
-    'get_spending': 'Reviewing your spending',
-    'list_transactions': 'Going through transactions',
-    'propose_transfer': 'Preparing a transfer',
-    'propose_commitment': 'Preparing a record',
-  };
+  const _Thinking();
 
   @override
   Widget build(BuildContext context) {
     final t = CediTokens.of(context);
-    final label =
-        tools.isEmpty ? 'Thinking' : _labels[tools.last] ?? 'Working on it';
+    const label = 'Thinking';
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -631,9 +602,8 @@ class _Thinking extends StatelessWidget {
 /// that, so it does not appear.
 class _CoachError extends StatelessWidget {
   final VoidCallback onRetry;
-  final VoidCallback onUseOwnKey;
 
-  const _CoachError({required this.onRetry, required this.onUseOwnKey});
+  const _CoachError({required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -673,18 +643,6 @@ class _CoachError extends StatelessWidget {
                         style: AppType.button
                             .copyWith(fontSize: 14, color: t.expense.ink)),
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: onUseOwnKey,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 4, vertical: 11),
-                  child: Text('Use my own API key',
-                      style: AppType.label
-                          .copyWith(fontSize: 14, color: t.inkMuted)),
                 ),
               ),
             ],

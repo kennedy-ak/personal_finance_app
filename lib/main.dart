@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
 import 'core/api_client.dart';
+import 'core/api_config.dart';
 import 'core/notifications.dart';
 import 'core/theme_mode.dart';
 import 'features/onboarding/data/onboarding_store.dart';
@@ -12,9 +13,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env');
 
-  await ApiClient.instance.init(
-    baseUrl: dotenv.env['API_URL'] ?? 'http://10.0.2.2:8000',
-  );
+  await ApiClient.instance.init(baseUrl: apiBaseUrl);
 
   await NotificationService().init();
 
